@@ -1,0 +1,20 @@
+CompileFlags:
+  Add:
+    - -Wno-unknown-warning-option
+  CompilationDatabase: .
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true
+  Designators: true
+
+Hover:
+  ShowAKA: true
+
+Index:
+  Background: Build
+  StandardLibrary: true
+
+Diagnostics:
+  UnusedIncludes: Strict

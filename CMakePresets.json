@@ -1,0 +1,220 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "MYPROJECT_ENABLE_CCACHE": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "MYPROJECT_ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "profile",
+      "displayName": "RelWithDebInfo + Profiling (perf)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MYPROJECT_ENABLE_PROFILING": "ON",
+        "MYPROJECT_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "RelWithDebInfo",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MYPROJECT_ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "minsizerel",
+      "displayName": "MinSizeRel",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel",
+        "MYPROJECT_ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug + ASan/UBSan",
+      "inherits": "debug",
+      "cacheVariables": {
+        "MYPROJECT_ENABLE_SANITIZERS": "ON",
+        "MYPROJECT_SANITIZERS": "address,undefined",
+		"MYPROJECT_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug + TSan",
+      "inherits": "debug",
+      "cacheVariables": {
+        "MYPROJECT_ENABLE_SANITIZERS": "ON",
+        "MYPROJECT_SANITIZERS": "thread",
+		"MYPROJECT_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Debug + Coverage",
+      "inherits": "debug",
+      "cacheVariables": {
+        "MYPROJECT_ENABLE_COVERAGE": "ON",
+		"MYPROJECT_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "clang-tidy",
+      "displayName": "Debug + clang-tidy",
+      "inherits": "debug",
+      "cacheVariables": {
+        "MYPROJECT_ENABLE_CLANG_TIDY": "ON"
+      }
+    },
+    {
+      "name": "iwyu",
+      "displayName": "Debug + include-what-you-use",
+      "inherits": "debug",
+      "cacheVariables": {
+        "MYPROJECT_ENABLE_INCLUDE_WHAT_YOU_USE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "profile",
+      "configurePreset": "profile"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "relwithdebinfo"
+    },
+    {
+      "name": "minsizerel",
+      "configurePreset": "minsizerel"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage"
+    },
+    {
+      "name": "clang-tidy",
+      "configurePreset": "clang-tidy"
+    },
+    {
+      "name": "iwyu",
+      "configurePreset": "iwyu"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1"
+      }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "dev",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "debug"
+        },
+        {
+          "type": "build",
+          "name": "debug"
+        },
+        {
+          "type": "test",
+          "name": "debug"
+        }
+      ]
+    }
+  ]
+}
