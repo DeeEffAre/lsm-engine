@@ -2,7 +2,6 @@
 
 #include "serialize_deserialize.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -12,27 +11,22 @@
 using ByteVec = std::vector<std::byte>;
 using ByteSpan = std::span<const std::byte>;
 
-// --- Heterogeneous Lookup between std::vector<std::byte> and std::span<const std::byte>
-
 struct ByteCompare {
     using is_transparent = void; // enables heterogeneous lookup
 
-    // 1. vector vs vector
-    bool operator()(const ByteVec& lhs, const ByteVec& rhs) const noexcept { return lhs < rhs; }
-
-    // 2. vector vs span
-    bool operator()(const ByteVec& lhs, ByteSpan rhs) const noexcept {
-        return std::ranges::lexicographical_compare(lhs, rhs);
+    // basic_string_view<std::byte> has optimizations like hardware level `memcmp` call
+    static constexpr std::basic_string_view<std::byte> to_view(ByteSpan span) noexcept {
+        return {span.data(), span.size()};
     }
 
-    // 3. span vs vector
-    bool operator()(ByteSpan lhs, const ByteVec& rhs) const noexcept {
-        return std::ranges::lexicographical_compare(lhs, rhs);
+    static constexpr std::basic_string_view<std::byte> to_view(const ByteVec& vec) noexcept {
+        return {vec.data(), vec.size()};
     }
 
-    // 4. span vs span
-    bool operator()(ByteSpan lhs, ByteSpan rhs) const noexcept {
-        return std::ranges::lexicographical_compare(lhs, rhs);
+    // spaceship operator (<=>) generates six comparisons at once (<, <=, >, >=, ==, and !=)
+    template <typename T, typename U>
+    bool operator()(const T& lhs, const U& rhs) const noexcept {
+        return (to_view(lhs) <=> to_view(rhs)) < 0;
     }
 };
 
