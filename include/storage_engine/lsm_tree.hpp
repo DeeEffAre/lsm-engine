@@ -6,17 +6,19 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <utility>
 
-template <typename K, typename V> class Memtable {
+using ByteVec = std::vector<std::byte>;
+
+class Memtable {
     // TODO: change this with to a custom lock free SkipList
-    std::map<K, V> data_{};
+    std::map<ByteVec, ByteVec> data_;
 
 public:
-    template <typename K_, typename V_> void put(K_&& key, V_&& value) noexcept {
-        data_.insert_or_assign(std::forward<K_>(key), std::forward<V_>(value));
-    }
+    void put(const ByteVec& key, ByteVec value) noexcept { data_.insert_or_assign(key, value); }
 
-    const V* get(const K& key) const noexcept {
+    // returns `nullptr` on error
+    [[nodiscard]] const ByteVec* get(const ByteVec& key) const noexcept {
         auto it = data_.find(key);
         if (it == data_.end()) {
             return nullptr;
@@ -24,75 +26,67 @@ public:
         return &(it->second);
     }
 
-    V* get(const K& key) noexcept {
-        const auto* const_this = static_cast<const Memtable*>(this);
-        return const_cast<V*>(const_this->get(key));
+    // returns `nullptr` on error
+    ByteVec* get(const ByteVec& key) noexcept {
+        return const_cast<ByteVec*>(std::as_const(*this).get(key)); // NOLINT
     }
 
-    [[nodiscard]] const std::map<K, V>& data() const noexcept { return data_; }
+    [[nodiscard]] const std::map<ByteVec, ByteVec>& data() const noexcept { return data_; }
 };
 
-template <typename K, typename V> class SSTable {
-    std::string path;
+class SSTable {
+    std::string path_;
 
 public:
-    SSTable(std::string path) : path(std::move(path)) {}
+    SSTable(std::string path) : path_(std::move(path)) {}
 
-    // returns `nullptr` on error
-    std::unique_ptr<V> get(K key) const noexcept {
-        struct Pair {
-            K key;
-            V value;
-        };
-
-        std::ifstream file(path, std::ios::binary);
+    // returns `false` on error
+    [[nodiscard]] bool get(const ByteVec& key, ByteVec& value) const noexcept {
+        std::ifstream file(path_, std::ios::binary);
 
         if (!file.is_open()) {
-            return nullptr;
+            return false;
         }
 
-        std::vector<Pair> pairs;
+        uint32_t key_len = 0;
+        uint32_t val_len = 0;
+        while (file.read(reinterpret_cast<char*>(&key_len), sizeof(key_len))) {
+            ByteVec iter_key(key_len);
+            file.read(reinterpret_cast<char*>(iter_key.data()), key_len);
 
-        uint32_t key_length = 0;
-        while (file.read(reinterpret_cast<char*>(&key_length), sizeof(key_length))) {
-            K iter_key = deserialize_value<K>(file, key_length);
+            file.read(reinterpret_cast<char*>(&val_len), sizeof(val_len));
 
-            uint32_t value_length = 0;
-            file.read(reinterpret_cast<char*>(&value_length), sizeof(value_length));
-            V iter_value = deserialize_value<V>(file, value_length);
-
-            if (file) {
-                pairs.emplace_back(iter_key, iter_value);
-            } else {
-                // TODO: logging maybe?
+            if (iter_key == key) {
+                value.resize(val_len);
+                file.read(reinterpret_cast<char*>(value.data()), val_len);
+                return true;
             }
+
+            file.seekg(val_len, std::ios::cur); // skip on mismatch
         }
 
-        file.close();
-
-        for (const auto& pair : pairs) {
-            if (pair.key == key) {
-                return std::make_unique<V>(pair.value);
-            }
-        }
-
-        return nullptr;
+        return false;
     }
 };
 
-template <typename K, typename V> class DB {
-    Memtable<K, V> memtable_{};
+class StorageEngine {
+    Memtable memtable_{};
 
 public:
-    template <typename K_, typename V_> void put(K_&& key, V_&& value) noexcept {
-        memtable_.put(std::forward<K_>(key), std::forward<V_>(value));
-    }
-
-    const V* get(const K& key) const noexcept { return memtable_.get(key); }
-    V* get(const K& key) noexcept { return memtable_.get(key); }
+    void put(const ByteVec& key, ByteVec value) noexcept { memtable_.put(key, std::move(value)); }
 
     // returns `nullptr` on error
-    std::unique_ptr<SSTable<K, V>> write_sstable(const std::string& path) const noexcept {
+    [[nodiscard]] const ByteVec* get(const ByteVec& key) const noexcept {
+        return memtable_.get(key);
+    }
+
+    // returns `nullptr` on error
+    ByteVec* get(const ByteVec& key) noexcept {
+        return const_cast<ByteVec*>(std::as_const(memtable_).get(key)); // NOLINT
+    }
+
+    // returns `nullptr` on error
+    [[nodiscard]] std::unique_ptr<SSTable> write_sstable(const std::string& path) const noexcept {
         std::ofstream file(path, std::ios::binary);
 
         if (!file.is_open()) {
@@ -100,17 +94,42 @@ public:
         }
 
         for (const auto& [key, value] : memtable_.data()) {
-            uint32_t key_len = get_encoded_size<K>(key);
+            auto key_len = static_cast<uint32_t>(key.size());
             file.write(reinterpret_cast<const char*>(&key_len), sizeof(key_len));
-            serialize_value<K>(file, key);
+            file.write(reinterpret_cast<const char*>(key.data()), key_len);
 
-            uint32_t val_len = get_encoded_size<V>(value);
+            auto val_len = static_cast<uint32_t>(value.size());
             file.write(reinterpret_cast<const char*>(&val_len), sizeof(val_len));
-            serialize_value<V>(file, value);
+            file.write(reinterpret_cast<const char*>(value.data()), val_len);
         }
 
-        file.close();
-
-        return std::make_unique<SSTable<K, V>>(path);
+        return std::make_unique<SSTable>(path);
     };
+};
+
+// an abstract layer for StorageEngine class with generic types
+template <typename K, typename V>
+class Database {
+    StorageEngine db_;
+
+public:
+    void put(const K& key, const V& value) noexcept {
+        ByteVec key_encoded = serialize_value<K>(key);
+        ByteVec value_encoded = serialize_value<V>(value);
+        db_.put(key_encoded, value_encoded);
+    }
+
+    // returns `nullptr` on error
+    [[nodiscard]] std::unique_ptr<V> get(const K& key) const noexcept {
+        ByteVec key_encoded = serialize_value<K>(key);
+        const ByteVec* value_from_db = std::as_const(db_).get(key_encoded);
+        if (value_from_db == nullptr) {
+            return nullptr;
+        }
+
+        return std::make_unique<V>(
+            deserialize_value<V>(*value_from_db, static_cast<uint32_t>(value_from_db->size())));
+    }
+
+    [[nodiscard]] StorageEngine& get_db() noexcept { return db_; }
 };

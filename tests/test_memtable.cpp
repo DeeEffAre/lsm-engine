@@ -3,18 +3,17 @@
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("Memtable Basic Operations", "[memtable]") {
-    Memtable<std::string, std::string> memtable;
-
+    Database<std::string, std::string> db;
     SECTION("Empty memtable should return nullptr") {
-        REQUIRE(memtable.get("non_existent_key") == nullptr);
+        REQUIRE(db.get("non_existent_key") == nullptr);
     }
 
     SECTION("Should insert data and retrieve it correctly") {
-        memtable.put("key1", "value1");
-        memtable.put("key2", "value2");
+        db.put("key1", "value1");
+        db.put("key2", "value2");
 
-        const std::string* v1 = memtable.get("key1");
-        const std::string* v2 = memtable.get("key2");
+        auto v1 = db.get("key1");
+        auto v2 = db.get("key2");
 
         REQUIRE(v1 != nullptr);
         REQUIRE(*v1 == "value1");
@@ -23,10 +22,10 @@ TEST_CASE("Memtable Basic Operations", "[memtable]") {
     }
 
     SECTION("Should overwrite value when putting the same key twice") {
-        memtable.put("key", "old_value");
-        memtable.put("key", "new_value");
+        db.put("key", "old_value");
+        db.put("key", "new_value");
 
-        const std::string* v = memtable.get("key");
+        auto v = db.get("key");
         REQUIRE(v != nullptr);
         REQUIRE(*v == "new_value");
     }
