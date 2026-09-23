@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstring>
+#include <span>
 
 // Formula:
 // $length (4 byte) + $value ($length)
@@ -10,6 +11,7 @@
 // - contiguous containers and types (e.g. std::string, std::vector<int>)
 
 using ByteVec = std::vector<std::byte>;
+using ByteSpan = std::span<const std::byte>;
 
 // TODO: generic contiguous container support (e.g. std::vector<T>)
 template <typename T>
@@ -31,7 +33,7 @@ uint32_t get_encoded_size(const T& value) {
 }
 
 template <Serializable T>
-std::vector<std::byte> serialize_value(const T& value) {
+ByteVec serialize_value(const T& value) {
     if constexpr (std::is_same_v<T, std::string>) {
         ByteVec buffer(value.size());
         std::memcpy(buffer.data(), reinterpret_cast<const char*>(value.data()), value.size());
@@ -49,7 +51,21 @@ std::vector<std::byte> serialize_value(const T& value) {
     }
 }
 
-// TODO: zero copy view only serializer for .get() method in Database
+template <Serializable T>
+ByteSpan serialize_view(const T& value) {
+    if constexpr (std::is_same_v<T, std::string>) {
+        return std::as_bytes(std::span{value});
+    }
+
+    else if constexpr (std::is_trivially_copyable_v<T>) {
+        // std::span{&value, 1}: makes it a single element span
+        return std::as_bytes(std::span{&value, 1});
+    }
+}
+
+// prevents passing rvalues, which will die when the function ends
+template <Serializable T>
+ByteSpan serialize_view(T&& value) = delete;
 
 // TODO: zero copy deserialization maybe
 template <Serializable T>

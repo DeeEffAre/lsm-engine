@@ -7,3 +7,4 @@ PointerAlignment: Left
 SortIncludes: CaseInsensitive
 IncludeBlocks: Regroup
 BreakTemplateDeclarations: Yes
+BreakAfterAttributes: Always

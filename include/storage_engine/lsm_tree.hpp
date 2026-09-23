@@ -2,6 +2,7 @@
 
 #include "serialize_deserialize.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -9,16 +10,42 @@
 #include <utility>
 
 using ByteVec = std::vector<std::byte>;
+using ByteSpan = std::span<const std::byte>;
+
+// --- Heterogeneous Lookup between std::vector<std::byte> and std::span<const std::byte>
+
+struct ByteCompare {
+    using is_transparent = void; // enables heterogeneous lookup
+
+    // 1. vector vs vector
+    bool operator()(const ByteVec& lhs, const ByteVec& rhs) const noexcept { return lhs < rhs; }
+
+    // 2. vector vs span
+    bool operator()(const ByteVec& lhs, ByteSpan rhs) const noexcept {
+        return std::ranges::lexicographical_compare(lhs, rhs);
+    }
+
+    // 3. span vs vector
+    bool operator()(ByteSpan lhs, const ByteVec& rhs) const noexcept {
+        return std::ranges::lexicographical_compare(lhs, rhs);
+    }
+
+    // 4. span vs span
+    bool operator()(ByteSpan lhs, ByteSpan rhs) const noexcept {
+        return std::ranges::lexicographical_compare(lhs, rhs);
+    }
+};
 
 class Memtable {
     // TODO: change this with to a custom lock free SkipList
-    std::map<ByteVec, ByteVec> data_;
+    std::map<ByteVec, ByteVec, ByteCompare> data_;
 
 public:
     void put(const ByteVec& key, ByteVec value) noexcept { data_.insert_or_assign(key, value); }
 
     // returns `nullptr` on error
-    [[nodiscard]] const ByteVec* get(const ByteVec& key) const noexcept {
+    [[nodiscard]]
+    const ByteVec* get(ByteSpan key) const noexcept {
         auto it = data_.find(key);
         if (it == data_.end()) {
             return nullptr;
@@ -27,11 +54,14 @@ public:
     }
 
     // returns `nullptr` on error
-    ByteVec* get(const ByteVec& key) noexcept {
+    ByteVec* get(ByteSpan key) noexcept {
         return const_cast<ByteVec*>(std::as_const(*this).get(key)); // NOLINT
     }
 
-    [[nodiscard]] const std::map<ByteVec, ByteVec>& data() const noexcept { return data_; }
+    [[nodiscard]]
+    auto data() const noexcept -> const std::map<ByteVec, ByteVec, ByteCompare>& {
+        return data_;
+    }
 };
 
 class SSTable {
@@ -41,7 +71,8 @@ public:
     SSTable(std::string path) : path_(std::move(path)) {}
 
     // returns `false` on error
-    [[nodiscard]] bool get(const ByteVec& key, ByteVec& value) const noexcept {
+    [[nodiscard]]
+    bool get(const ByteVec& key, ByteVec& value) const noexcept {
         std::ifstream file(path_, std::ios::binary);
 
         if (!file.is_open()) {
@@ -76,17 +107,19 @@ public:
     void put(const ByteVec& key, ByteVec value) noexcept { memtable_.put(key, std::move(value)); }
 
     // returns `nullptr` on error
-    [[nodiscard]] const ByteVec* get(const ByteVec& key) const noexcept {
+    [[nodiscard]]
+    const ByteVec* get(ByteSpan key) const noexcept {
         return memtable_.get(key);
     }
 
     // returns `nullptr` on error
-    ByteVec* get(const ByteVec& key) noexcept {
+    ByteVec* get(ByteSpan key) noexcept {
         return const_cast<ByteVec*>(std::as_const(memtable_).get(key)); // NOLINT
     }
 
     // returns `nullptr` on error
-    [[nodiscard]] std::unique_ptr<SSTable> write_sstable(const std::string& path) const noexcept {
+    [[nodiscard]]
+    std::unique_ptr<SSTable> write_sstable(const std::string& path) const noexcept {
         std::ofstream file(path, std::ios::binary);
 
         if (!file.is_open()) {
@@ -120,8 +153,10 @@ public:
     }
 
     // returns `nullptr` on error
-    [[nodiscard]] std::unique_ptr<V> get(const K& key) const noexcept {
-        ByteVec key_encoded = serialize_value<K>(key);
+    [[nodiscard]]
+    std::unique_ptr<V> get(const K& key) const noexcept {
+        ByteSpan key_encoded = serialize_view<K>(key);
+
         const ByteVec* value_from_db = std::as_const(db_).get(key_encoded);
         if (value_from_db == nullptr) {
             return nullptr;
@@ -131,5 +166,8 @@ public:
             deserialize_value<V>(*value_from_db, static_cast<uint32_t>(value_from_db->size())));
     }
 
-    [[nodiscard]] StorageEngine& get_db() noexcept { return db_; }
+    [[nodiscard]]
+    StorageEngine& get_db() noexcept {
+        return db_;
+    }
 };
