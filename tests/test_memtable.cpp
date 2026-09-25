@@ -1,4 +1,4 @@
-#include "storage_engine/lsm_tree.hpp"
+#include "storage_engine/engine.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 

@@ -1,7 +1,9 @@
 # find_package(fmt CONFIG REQUIRED)
 
 add_library(storage_engine_core STATIC
-    lib.cpp
+    memtable.cpp
+    sstable.cpp
+    engine.cpp
 )
 
 myproject_target_setup(storage_engine_core)

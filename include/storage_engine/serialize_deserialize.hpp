@@ -1,5 +1,7 @@
 #pragma once
 
+#include "storage_engine/types.hpp"
+
 #include <cstring>
 #include <span>
 
@@ -9,9 +11,6 @@
 // supported types:
 // - is_trivially_copyable types (e.g. uint32_t, int)
 // - contiguous containers and types (e.g. std::string, std::vector<int>)
-
-using ByteVec = std::vector<std::byte>;
-using ByteSpan = std::span<const std::byte>;
 
 // TODO: generic contiguous container support (e.g. std::vector<T>)
 template <typename T>

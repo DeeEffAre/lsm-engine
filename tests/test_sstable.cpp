@@ -1,4 +1,5 @@
-#include "storage_engine/lsm_tree.hpp"
+#include "storage_engine/engine.hpp"
+#include "storage_engine/serialize_deserialize.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
