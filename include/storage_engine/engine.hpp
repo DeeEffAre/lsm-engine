@@ -5,6 +5,8 @@
 #include "storage_engine/sstable.hpp"
 #include "storage_engine/types.hpp"
 
+#include <expected>
+
 class Engine {
     Memtable memtable_;
 
@@ -18,21 +20,31 @@ public:
     // returns `nullptr` on error
     ByteVec* get(ByteSpan key) noexcept;
 
-    // returns `nullptr` on error
     [[nodiscard]]
-    std::unique_ptr<SSTable> write_sstable(const std::string& path) const noexcept;
+    std::expected<SSTable, std::string> write_sstable(std::string path) const noexcept;
 };
 
 // an abstract layer for StorageEngine class with generic types
 template <typename K, typename V>
 class Database {
-    Engine db_;
+    Engine db_{};
+    std::vector<SSTable> sstables_;
+    int max_memtable_size_;
+    int memtable_size_{0};
+    int sstable_counter_{0};
 
 public:
-    void put(const K& key, const V& value) noexcept {
+    Database(int max_memtable_size) : max_memtable_size_(max_memtable_size) {}
+
+    bool put(const K& key, const V& value) noexcept {
         ByteVec key_encoded = serialize_value<K>(key);
         ByteVec value_encoded = serialize_value<V>(value);
         db_.put(key_encoded, value_encoded);
+        memtable_size_++;
+
+        if (memtable_size_ >= max_memtable_size_) {
+            return flush_memtable();
+        }
     }
 
     // returns `nullptr` on error
@@ -41,12 +53,40 @@ public:
         ByteSpan key_encoded = serialize_view<K>(key);
 
         const ByteVec* value_from_db = std::as_const(db_).get(key_encoded);
-        if (value_from_db == nullptr) {
-            return nullptr;
+        if (value_from_db != nullptr) {
+            return std::make_unique<V>(
+                deserialize_value<V>(*value_from_db, static_cast<uint32_t>(value_from_db->size())));
         }
 
-        return std::make_unique<V>(
-            deserialize_value<V>(*value_from_db, static_cast<uint32_t>(value_from_db->size())));
+        for (const auto& table : sstables_) {
+            auto result = table.get(key_encoded);
+            if (result.has_value()) {
+                return std::make_unique<V>(
+                    deserialize_value<V>(*result, static_cast<uint32_t>(result->size())));
+            }
+
+            if (result.error() == SSTableError::FILE_ERROR) {
+                // NOTE: quitting from function may not be the best choice when a file error
+                // occurrs.
+                return nullptr;
+            }
+        }
+
+        return nullptr;
+    }
+
+    bool flush_memtable() noexcept {
+        std::string sstable_path = std::format("data-{}.sstable", sstable_counter_);
+        auto sstable = db_.write_sstable(std::move(sstable_path));
+
+        if (!sstable.has_value()) {
+            std::println(stderr, "Error while flushing memtable: {}", sstable.error());
+            return false;
+        }
+
+        sstables_.push_back(*sstable);
+
+        return true;
     }
 
     [[nodiscard]]

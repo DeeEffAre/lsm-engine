@@ -1,14 +1,15 @@
 #include "storage_engine/sstable.hpp"
 
+#include <expected>
 #include <fstream>
 
 SSTable::SSTable(std::string path) : path_(std::move(path)) {}
 
-bool SSTable::get(const ByteVec& key, ByteVec& value) const noexcept {
+std::expected<ByteVec, SSTableError> SSTable::get(ByteSpan key) const noexcept {
     std::ifstream file(path_, std::ios::binary);
 
     if (!file.is_open()) {
-        return false;
+        return std::unexpected(SSTableError::FILE_ERROR);
     }
 
     uint32_t key_len = 0;
@@ -19,14 +20,15 @@ bool SSTable::get(const ByteVec& key, ByteVec& value) const noexcept {
 
         file.read(reinterpret_cast<char*>(&val_len), sizeof(val_len));
 
-        if (iter_key == key) {
-            value.resize(val_len);
-            file.read(reinterpret_cast<char*>(value.data()), val_len);
-            return true;
+        if (std::ranges::equal(iter_key, key)) {
+            std::vector<std::byte> buffer;
+            buffer.resize(val_len);
+            file.read(reinterpret_cast<char*>(buffer.data()), val_len);
+            return buffer;
         }
 
         file.seekg(val_len, std::ios::cur); // skip on mismatch
     }
 
-    return false;
+    return std::unexpected(SSTableError::NOT_FOUND);
 }

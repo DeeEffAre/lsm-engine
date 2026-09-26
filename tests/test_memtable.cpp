@@ -3,7 +3,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("Memtable Basic Operations", "[memtable]") {
-    Database<std::string, std::string> db;
+    Database<std::string, std::string> db{100};
+
     SECTION("Empty memtable should return nullptr") {
         REQUIRE(db.get("non_existent_key") == nullptr);
     }

@@ -1,5 +1,6 @@
 #include "storage_engine/engine.hpp"
 
+#include <expected>
 #include <fstream>
 
 void Engine::put(const ByteVec& key, ByteVec value) noexcept {
@@ -14,15 +15,15 @@ ByteVec* Engine::get(ByteSpan key) noexcept {
     return const_cast<ByteVec*>(std::as_const(memtable_).get(key)); // NOLINT
 }
 
-std::unique_ptr<SSTable> Engine::write_sstable(const std::string& path) const noexcept {
+std::expected<SSTable, std::string> Engine::write_sstable(std::string path) const noexcept {
     std::ofstream file(path, std::ios::binary);
     if (!file.is_open()) {
-        return nullptr;
+        return std::unexpected("Failed to open file");
     }
 
     if (!memtable_.write_to(file)) {
-        return nullptr;
+        return std::unexpected("Failed to write to file");
     }
 
-    return std::make_unique<SSTable>(path);
+    return SSTable(std::move(path));
 };

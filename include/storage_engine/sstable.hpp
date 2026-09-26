@@ -2,13 +2,19 @@
 
 #include "types.hpp"
 
+#include <expected>
+
+enum class SSTableError : uint8_t {
+    FILE_ERROR,
+    NOT_FOUND,
+};
+
 class SSTable {
     std::string path_;
 
 public:
     SSTable(std::string path);
 
-    // returns `false` on error
     [[nodiscard]]
-    bool get(const ByteVec& key, ByteVec& value) const noexcept;
+    std::expected<ByteVec, SSTableError> get(ByteSpan key) const noexcept;
 };
