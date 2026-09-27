@@ -76,3 +76,53 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         fs::remove(test_path);
     }
 }
+
+TEST_CASE("SSTable error handling", "[sstable]") {
+    SECTION("Missing file returns FILE_ERROR") {
+        const SSTable table("test_sstable_missing_file.bin");
+
+        auto result = table.get(serialize_value<std::string>("key"));
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error() == SSTableError::FILE_ERROR);
+    }
+}
+
+TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
+    const std::string path = "test_sstable_edge_cases.bin";
+
+    if (fs::exists(path)) {
+        fs::remove(path);
+    }
+
+    SECTION("Empty values are returned as found entries") {
+        Engine engine;
+        engine.put(serialize_value<std::string>("empty"), ByteVec{});
+        engine.put(serialize_value<std::string>("full"), serialize_value<std::string>("value"));
+
+        auto table = engine.write_sstable(path);
+        REQUIRE(table.has_value());
+
+        auto empty = table->get(serialize_value<std::string>("empty"));
+        REQUIRE(empty.has_value());
+        REQUIRE(empty->empty());
+
+        auto full = table->get(serialize_value<std::string>("full"));
+        REQUIRE(full.has_value());
+        REQUIRE(deserialize_value<std::string>(*full, static_cast<uint32_t>(full->size())) == "value");
+    }
+
+    SECTION("Flushing an empty memtable yields a table where every key is missing") {
+        Engine engine;
+
+        auto table = engine.write_sstable(path);
+        REQUIRE(table.has_value());
+
+        auto result = table->get(serialize_value<std::string>("anything"));
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error() == SSTableError::NOT_FOUND);
+    }
+
+    if (fs::exists(path)) {
+        fs::remove(path);
+    }
+}

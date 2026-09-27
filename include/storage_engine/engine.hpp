@@ -45,6 +45,8 @@ public:
         if (memtable_size_ >= max_memtable_size_) {
             return flush_memtable();
         }
+
+        return true;
     }
 
     // returns `nullptr` on error
@@ -85,6 +87,8 @@ public:
         }
 
         sstables_.push_back(*sstable);
+        sstable_counter_++;
+        memtable_size_ = 0;
 
         return true;
     }

@@ -55,5 +55,6 @@ bool Memtable::write_to(std::ostream& stream) const noexcept {
         stream.write(reinterpret_cast<const char*>(&val_len), sizeof(val_len));
         stream.write(reinterpret_cast<const char*>(value.data()), val_len);
     }
-    return true;
+
+    return static_cast<bool>(stream);
 }

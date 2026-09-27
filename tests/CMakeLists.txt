@@ -4,7 +4,9 @@ list(APPEND CMAKE_MODULE_PATH ${Catch2_DIR})
 include(Catch)
 
 add_executable(unit_tests
+    test_engine.cpp
     test_memtable.cpp
+    test_serialize_deserialize.cpp
     test_sstable.cpp
 )
 
