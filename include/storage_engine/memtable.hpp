@@ -22,4 +22,6 @@ public:
     ByteVec* get(ByteSpan key) noexcept;
 
     bool write_to(std::ostream& stream) const noexcept;
+
+    void clear() noexcept;
 };

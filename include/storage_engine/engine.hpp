@@ -6,6 +6,7 @@
 #include "storage_engine/types.hpp"
 
 #include <expected>
+#include <ranges>
 
 class Engine {
     Memtable memtable_;
@@ -22,6 +23,8 @@ public:
 
     [[nodiscard]]
     std::expected<SSTable, std::string> write_sstable(std::string path) const noexcept;
+
+    void clear_memtable() noexcept;
 };
 
 // an abstract layer for StorageEngine class with generic types
@@ -60,7 +63,7 @@ public:
                 deserialize_value<V>(*value_from_db, static_cast<uint32_t>(value_from_db->size())));
         }
 
-        for (const auto& table : sstables_) {
+        for (const auto& table : sstables_ | std::views::reverse) {
             auto result = table.get(key_encoded);
             if (result.has_value()) {
                 return std::make_unique<V>(
@@ -77,6 +80,8 @@ public:
         return nullptr;
     }
 
+    void clear_memtable() noexcept { db_.clear_memtable(); }
+
     bool flush_memtable() noexcept {
         std::string sstable_path = std::format("data-{}.sstable", sstable_counter_);
         auto sstable = db_.write_sstable(std::move(sstable_path));
@@ -89,6 +94,7 @@ public:
         sstables_.push_back(*sstable);
         sstable_counter_++;
         memtable_size_ = 0;
+        clear_memtable();
 
         return true;
     }

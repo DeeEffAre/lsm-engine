@@ -2,7 +2,6 @@
 #include "storage_engine/memtable.hpp"
 
 #include <catch2/catch_test_macros.hpp>
-
 #include <cstdint>
 #include <cstring>
 #include <sstream>
@@ -174,11 +173,37 @@ TEST_CASE("Memtable write_to", "[memtable]") {
 
         struct FailingBuffer : std::streambuf {
         protected:
-            std::streamsize xsputn(const char*, std::streamsize) override { return 0; }
-            int overflow(int) override { return traits_type::eof(); }
+            std::streamsize xsputn(const char* /*__s*/, std::streamsize /*__n*/) override {
+                return 0;
+            }
+            int overflow(int /*__c*/) override { return traits_type::eof(); }
         } buffer;
         std::ostream failing_stream(&buffer);
 
         REQUIRE_FALSE(memtable.write_to(failing_stream));
+    }
+}
+
+TEST_CASE("Memtable clear", "[memtable]") {
+    SECTION("Removes all entries") {
+        Memtable memtable;
+        memtable.put(to_bytes("a"), to_bytes("1"));
+        memtable.put(to_bytes("b"), to_bytes("2"));
+
+        memtable.clear();
+
+        REQUIRE(memtable.get(to_bytes("a")) == nullptr);
+        REQUIRE(memtable.get(to_bytes("b")) == nullptr);
+    }
+
+    SECTION("Cleared memtable writes nothing") {
+        Memtable memtable;
+        memtable.put(to_bytes("a"), to_bytes("1"));
+
+        memtable.clear();
+
+        std::ostringstream stream(std::ios::out | std::ios::binary);
+        REQUIRE(memtable.write_to(stream));
+        REQUIRE(stream.str().empty());
     }
 }

@@ -23,7 +23,9 @@ struct ByteCompare {
 
 // TODO: change this to a custom skiplist
 struct Memtable::Impl {
-    std::map<ByteVec, ByteVec, ByteCompare> data_;
+    std::map<ByteVec, ByteVec, ByteCompare> data_; // NOLINT
+
+    void clear() noexcept { data_.clear(); }
 };
 
 Memtable::Memtable() : pimpl_(std::make_unique<Impl>()) {}
@@ -57,4 +59,8 @@ bool Memtable::write_to(std::ostream& stream) const noexcept {
     }
 
     return static_cast<bool>(stream);
+}
+
+void Memtable::clear() noexcept {
+    pimpl_->clear();
 }

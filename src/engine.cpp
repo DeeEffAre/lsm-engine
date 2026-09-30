@@ -27,3 +27,7 @@ std::expected<SSTable, std::string> Engine::write_sstable(std::string path) cons
 
     return SSTable(std::move(path));
 };
+
+void Engine::clear_memtable() noexcept {
+    memtable_.clear();
+}
