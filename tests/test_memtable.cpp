@@ -18,6 +18,12 @@ ByteVec to_bytes(std::string_view text) {
     return bytes;
 }
 
+ByteVec encode_bytes(std::string_view text) {
+    auto encoded = encode<ByteVec>(to_bytes(text));
+    REQUIRE(encoded.has_value());
+    return *encoded;
+}
+
 std::vector<std::pair<std::string, std::string>> parse_entries(const std::string& raw) {
     std::vector<std::pair<std::string, std::string>> entries;
 
@@ -142,21 +148,26 @@ TEST_CASE("Memtable byte-level operations", "[memtable]") {
 TEST_CASE("Memtable write_to", "[memtable]") {
     SECTION("Writes entries in lexicographic key order with length prefixes") {
         Memtable memtable;
-        memtable.put(to_bytes("b"), to_bytes("2"));
-        memtable.put(to_bytes("a"), to_bytes("1"));
-        memtable.put(to_bytes("c"), to_bytes("3"));
+        memtable.put(to_bytes("z"), encode_bytes("26"));
+        memtable.put(to_bytes("aa"), encode_bytes("1"));
+        memtable.put(to_bytes("b"), encode_bytes("2"));
+        memtable.put(to_bytes("c"), encode_bytes("3"));
 
         std::ostringstream stream(std::ios::out | std::ios::binary);
         REQUIRE(memtable.write_to(stream));
 
+        // Keys stay raw in memory, so short keys must not sort before longer
+        // ones just because the encoded length prefix is written first.
         const auto entries = parse_entries(stream.str());
-        REQUIRE(entries.size() == 3);
-        REQUIRE(entries[0].first == "a");
+        REQUIRE(entries.size() == 4);
+        REQUIRE(entries[0].first == "aa");
         REQUIRE(entries[0].second == "1");
         REQUIRE(entries[1].first == "b");
         REQUIRE(entries[1].second == "2");
         REQUIRE(entries[2].first == "c");
         REQUIRE(entries[2].second == "3");
+        REQUIRE(entries[3].first == "z");
+        REQUIRE(entries[3].second == "26");
     }
 
     SECTION("Empty memtable writes nothing") {

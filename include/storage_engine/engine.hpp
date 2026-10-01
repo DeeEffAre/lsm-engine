@@ -40,9 +40,13 @@ public:
     Database(int max_memtable_size) : max_memtable_size_(max_memtable_size) {}
 
     bool put(const K& key, const V& value) noexcept {
-        ByteVec key_encoded = serialize_value<K>(key);
-        ByteVec value_encoded = serialize_value<V>(value);
-        db_.put(key_encoded, value_encoded);
+        auto value_encoded = encode<V>(value);
+        if (!value_encoded.has_value()) {
+            return false;
+        }
+
+        const ByteVec key_encoded = serialize_value<K>(key);
+        db_.put(key_encoded, std::move(*value_encoded));
         memtable_size_++;
 
         if (memtable_size_ >= max_memtable_size_) {
@@ -55,19 +59,25 @@ public:
     // returns `nullptr` on error
     [[nodiscard]]
     std::unique_ptr<V> get(const K& key) const noexcept {
-        ByteSpan key_encoded = serialize_view<K>(key);
+        const ByteSpan probe = serialize_view<K>(key);
 
-        const ByteVec* value_from_db = std::as_const(db_).get(key_encoded);
+        const auto decode_value = [](const ByteVec& bytes) -> std::unique_ptr<V> {
+            auto decoded = decode<V>(bytes);
+            if (!decoded.has_value()) {
+                return nullptr;
+            }
+            return std::make_unique<V>(std::move(*decoded));
+        };
+
+        const ByteVec* value_from_db = std::as_const(db_).get(probe);
         if (value_from_db != nullptr) {
-            return std::make_unique<V>(
-                deserialize_value<V>(*value_from_db, static_cast<uint32_t>(value_from_db->size())));
+            return decode_value(*value_from_db);
         }
 
         for (const auto& table : sstables_ | std::views::reverse) {
-            auto result = table.get(key_encoded);
+            auto result = table.get(probe);
             if (result.has_value()) {
-                return std::make_unique<V>(
-                    deserialize_value<V>(*result, static_cast<uint32_t>(result->size())));
+                return decode_value(*result);
             }
 
             if (result.error() == SSTableError::FILE_ERROR) {

@@ -26,15 +26,18 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         REQUIRE(sstable.has_value());
         REQUIRE(fs::exists(test_path));
 
-        // Disk lookup tests: SSTable works on raw bytes, so keys/values
-        // must be (de)serialized explicitly.
+        // Disk lookup tests: keys are raw byte views, values are encoded records.
         auto res1 = sstable->get(serialize_value<std::string>("k1"));
         REQUIRE(res1.has_value());
-        REQUIRE(deserialize_value<std::string>(*res1, static_cast<uint32_t>(res1->size())) == "v1");
+        const auto value1 = decode<std::string>(*res1);
+        REQUIRE(value1.has_value());
+        REQUIRE(*value1 == "v1");
 
         auto res3 = sstable->get(serialize_value<std::string>("k3"));
         REQUIRE(res3.has_value());
-        REQUIRE(deserialize_value<std::string>(*res3, static_cast<uint32_t>(res3->size())) == "v3");
+        const auto value3 = decode<std::string>(*res3);
+        REQUIRE(value3.has_value());
+        REQUIRE(*value3 == "v3");
 
         auto res_null = sstable->get(serialize_value<std::string>("non_existent"));
         REQUIRE_FALSE(res_null.has_value());
@@ -51,11 +54,15 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
 
         auto res1 = sstable->get(serialize_value<int>(1));
         REQUIRE(res1.has_value());
-        REQUIRE(deserialize_value<double>(*res1, static_cast<uint32_t>(res1->size())) == 10.5);
+        const auto value1 = decode<double>(*res1);
+        REQUIRE(value1.has_value());
+        REQUIRE(*value1 == 10.5);
 
         auto res2 = sstable->get(serialize_value<int>(2));
         REQUIRE(res2.has_value());
-        REQUIRE(deserialize_value<double>(*res2, static_cast<uint32_t>(res2->size())) == 20.5);
+        const auto value2 = decode<double>(*res2);
+        REQUIRE(value2.has_value());
+        REQUIRE(*value2 == 20.5);
 
         auto res_null = sstable->get(serialize_value<int>(999));
         REQUIRE_FALSE(res_null.has_value());
@@ -95,20 +102,29 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
     }
 
     SECTION("Empty values are returned as found entries") {
+        const auto empty_encoded = encode<std::string>("");
+        const auto full_encoded = encode<std::string>("value");
+        REQUIRE(empty_encoded.has_value());
+        REQUIRE(full_encoded.has_value());
+
         Engine engine;
-        engine.put(serialize_value<std::string>("empty"), ByteVec{});
-        engine.put(serialize_value<std::string>("full"), serialize_value<std::string>("value"));
+        engine.put(serialize_value<std::string>("empty"), *empty_encoded);
+        engine.put(serialize_value<std::string>("full"), *full_encoded);
 
         auto table = engine.write_sstable(path);
         REQUIRE(table.has_value());
 
         auto empty = table->get(serialize_value<std::string>("empty"));
         REQUIRE(empty.has_value());
-        REQUIRE(empty->empty());
+        const auto empty_decoded = decode<std::string>(*empty);
+        REQUIRE(empty_decoded.has_value());
+        REQUIRE(empty_decoded->empty());
 
         auto full = table->get(serialize_value<std::string>("full"));
         REQUIRE(full.has_value());
-        REQUIRE(deserialize_value<std::string>(*full, static_cast<uint32_t>(full->size())) == "value");
+        const auto full_decoded = decode<std::string>(*full);
+        REQUIRE(full_decoded.has_value());
+        REQUIRE(*full_decoded == "value");
     }
 
     SECTION("Flushing an empty memtable yields a table where every key is missing") {

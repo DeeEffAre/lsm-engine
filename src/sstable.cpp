@@ -1,5 +1,8 @@
 #include "storage_engine/sstable.hpp"
 
+#include "storage_engine/serialize_deserialize.hpp"
+
+#include <cstring>
 #include <expected>
 #include <fstream>
 
@@ -12,22 +15,43 @@ std::expected<ByteVec, SSTableError> SSTable::get(ByteSpan key) const noexcept {
         return std::unexpected(SSTableError::FILE_ERROR);
     }
 
-    uint32_t key_len = 0;
-    uint32_t val_len = 0;
-    while (file.read(reinterpret_cast<char*>(&key_len), sizeof(key_len))) {
-        ByteVec iter_key(key_len);
-        file.read(reinterpret_cast<char*>(iter_key.data()), key_len);
+    constexpr size_t LENGTH_PREFIX_LENGTH = sizeof(uint32_t);
 
-        file.read(reinterpret_cast<char*>(&val_len), sizeof(val_len));
-
-        if (std::ranges::equal(iter_key, key)) {
-            std::vector<std::byte> buffer;
-            buffer.resize(val_len);
-            file.read(reinterpret_cast<char*>(buffer.data()), val_len);
-            return buffer;
+    while (true) {
+        uint32_t key_length = 0;
+        if (!file.read(reinterpret_cast<char*>(&key_length), LENGTH_PREFIX_LENGTH)) {
+            break;
         }
 
-        file.seekg(val_len, std::ios::cur); // skip on mismatch
+        // Rebuild the encoded key record (length prefix + payload) so it can be decoded.
+        ByteVec encoded_key(LENGTH_PREFIX_LENGTH + key_length);
+        std::memcpy(encoded_key.data(), &key_length, LENGTH_PREFIX_LENGTH);
+        if (!file.read(reinterpret_cast<char*>(encoded_key.data() + LENGTH_PREFIX_LENGTH),
+                       key_length)) {
+            return std::unexpected(SSTableError::FILE_ERROR);
+        }
+
+        uint32_t value_length = 0;
+        if (!file.read(reinterpret_cast<char*>(&value_length), LENGTH_PREFIX_LENGTH)) {
+            return std::unexpected(SSTableError::FILE_ERROR);
+        }
+
+        auto stored_key = decode<ByteVec>(encoded_key);
+        if (!stored_key.has_value()) {
+            return std::unexpected(SSTableError::FILE_ERROR);
+        }
+
+        if (std::ranges::equal(*stored_key, key)) {
+            ByteVec encoded_value(LENGTH_PREFIX_LENGTH + value_length);
+            std::memcpy(encoded_value.data(), &value_length, LENGTH_PREFIX_LENGTH);
+            if (!file.read(reinterpret_cast<char*>(encoded_value.data() + LENGTH_PREFIX_LENGTH),
+                           value_length)) {
+                return std::unexpected(SSTableError::FILE_ERROR);
+            }
+            return encoded_value;
+        }
+
+        file.seekg(value_length, std::ios::cur); // skip on mismatch
     }
 
     return std::unexpected(SSTableError::NOT_FOUND);

@@ -1,5 +1,6 @@
 #include "storage_engine/memtable.hpp"
 
+#include "storage_engine/serialize_deserialize.hpp"
 #include "storage_engine/types.hpp"
 
 #include <algorithm>
@@ -163,16 +164,18 @@ ByteVec* Memtable::get(ByteSpan key) noexcept {
 
 bool Memtable::write_to(std::ostream& stream) const noexcept {
     for (auto* node = pimpl_->data_.begin(); node != nullptr; node = node->forward[0]) {
-        const auto& key = node->key;
+        // Keys are stored raw and framed here; values are stored already encoded.
+        auto encoded_key = encode<ByteVec>(node->key);
+        if (!encoded_key.has_value()) {
+            return false;
+        }
+
         const auto& value = node->value;
 
-        auto key_len = static_cast<uint32_t>(key.size());
-        stream.write(reinterpret_cast<const char*>(&key_len), sizeof(key_len));
-        stream.write(reinterpret_cast<const char*>(key.data()), key_len);
-
-        auto val_len = static_cast<uint32_t>(value.size());
-        stream.write(reinterpret_cast<const char*>(&val_len), sizeof(val_len));
-        stream.write(reinterpret_cast<const char*>(value.data()), val_len);
+        stream.write(reinterpret_cast<const char*>(encoded_key->data()),
+                     static_cast<std::streamsize>(encoded_key->size()));
+        stream.write(reinterpret_cast<const char*>(value.data()),
+                     static_cast<std::streamsize>(value.size()));
     }
 
     return static_cast<bool>(stream);

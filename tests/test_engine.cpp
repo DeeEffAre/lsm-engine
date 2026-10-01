@@ -23,13 +23,18 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
     const std::string path = "test_engine_data.bin";
     remove_if_exists(path);
 
+    const auto value_encoded = encode<std::string>("value");
+    REQUIRE(value_encoded.has_value());
+
     Engine engine;
-    engine.put(serialize_value<std::string>("key"), serialize_value<std::string>("value"));
+    engine.put(serialize_value<std::string>("key"), *value_encoded);
 
     const Engine& const_engine = engine;
     const ByteVec* value = const_engine.get(serialize_value<std::string>("key"));
     REQUIRE(value != nullptr);
-    REQUIRE(deserialize_value<std::string>(*value, static_cast<uint32_t>(value->size())) == "value");
+    const auto decoded = decode<std::string>(*value);
+    REQUIRE(decoded.has_value());
+    REQUIRE(*decoded == "value");
     REQUIRE(const_engine.get(serialize_value<std::string>("missing")) == nullptr);
 
     auto table = engine.write_sstable(path);
@@ -38,8 +43,9 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
 
     auto from_disk = table->get(serialize_value<std::string>("key"));
     REQUIRE(from_disk.has_value());
-    REQUIRE(deserialize_value<std::string>(*from_disk, static_cast<uint32_t>(from_disk->size())) ==
-            "value");
+    const auto from_disk_decoded = decode<std::string>(*from_disk);
+    REQUIRE(from_disk_decoded.has_value());
+    REQUIRE(*from_disk_decoded == "value");
 
     remove_if_exists(path);
 }
