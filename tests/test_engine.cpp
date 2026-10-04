@@ -2,8 +2,6 @@
 #include "storage_engine/serialize_deserialize.hpp"
 
 #include <catch2/catch_test_macros.hpp>
-
-#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -17,6 +15,13 @@ void remove_if_exists(const std::string& path) {
     }
 }
 
+template <typename T>
+ByteVec serialized_key(const T& value) {
+    auto encoded = serialize_value(value);
+    REQUIRE(encoded.has_value());
+    return *encoded;
+}
+
 } // namespace
 
 TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
@@ -27,21 +32,21 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
     REQUIRE(value_encoded.has_value());
 
     Engine engine;
-    engine.put(serialize_value<std::string>("key"), *value_encoded);
+    engine.put(serialized_key<std::string>("key"), *value_encoded);
 
     const Engine& const_engine = engine;
-    const ByteVec* value = const_engine.get(serialize_value<std::string>("key"));
+    const ByteVec* value = const_engine.get(serialized_key<std::string>("key"));
     REQUIRE(value != nullptr);
     const auto decoded = decode<std::string>(*value);
     REQUIRE(decoded.has_value());
     REQUIRE(*decoded == "value");
-    REQUIRE(const_engine.get(serialize_value<std::string>("missing")) == nullptr);
+    REQUIRE(const_engine.get(serialized_key<std::string>("missing")) == nullptr);
 
     auto table = engine.write_sstable(path);
     REQUIRE(table.has_value());
     REQUIRE(fs::exists(path));
 
-    auto from_disk = table->get(serialize_value<std::string>("key"));
+    auto from_disk = table->get(serialized_key<std::string>("key"));
     REQUIRE(from_disk.has_value());
     const auto from_disk_decoded = decode<std::string>(*from_disk);
     REQUIRE(from_disk_decoded.has_value());
@@ -109,13 +114,13 @@ TEST_CASE("Database flush behavior", "[engine][flush]") {
         db.put("a", "1");
 
         // Before the flush the value only lives in the memtable.
-        REQUIRE(db.get_db().get(serialize_value<std::string>("a")) != nullptr);
+        REQUIRE(db.get_db().get(serialized_key<std::string>("a")) != nullptr);
 
         db.put("b", "2");
 
         // After the flush the memtable must be empty...
-        REQUIRE(db.get_db().get(serialize_value<std::string>("a")) == nullptr);
-        REQUIRE(db.get_db().get(serialize_value<std::string>("b")) == nullptr);
+        REQUIRE(db.get_db().get(serialized_key<std::string>("a")) == nullptr);
+        REQUIRE(db.get_db().get(serialized_key<std::string>("b")) == nullptr);
 
         // ...but the values must still be reachable through the sstable.
         auto a = db.get("a");
@@ -129,12 +134,12 @@ TEST_CASE("Database flush behavior", "[engine][flush]") {
         db.put("b", "2");
 
         const SSTable first("data-0.sstable");
-        REQUIRE(first.get(serialize_value<std::string>("a")).has_value());
-        REQUIRE_FALSE(first.get(serialize_value<std::string>("b")).has_value());
+        REQUIRE(first.get(serialized_key<std::string>("a")).has_value());
+        REQUIRE_FALSE(first.get(serialized_key<std::string>("b")).has_value());
 
         const SSTable second("data-1.sstable");
-        REQUIRE(second.get(serialize_value<std::string>("b")).has_value());
-        REQUIRE_FALSE(second.get(serialize_value<std::string>("a")).has_value());
+        REQUIRE(second.get(serialized_key<std::string>("b")).has_value());
+        REQUIRE_FALSE(second.get(serialized_key<std::string>("a")).has_value());
     }
 
     SECTION("Overwritten keys are read from the newest sstable") {

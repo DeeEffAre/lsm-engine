@@ -45,8 +45,12 @@ public:
             return false;
         }
 
-        const ByteVec key_encoded = serialize_value<K>(key);
-        db_.put(key_encoded, std::move(*value_encoded));
+        auto key_encoded = serialize_value<K>(key);
+        if (!key_encoded.has_value()) {
+            return false;
+        }
+
+        db_.put(*key_encoded, std::move(*value_encoded));
         memtable_size_++;
 
         if (memtable_size_ >= max_memtable_size_) {
@@ -59,7 +63,11 @@ public:
     // returns `nullptr` on error
     [[nodiscard]]
     std::unique_ptr<V> get(const K& key) const noexcept {
-        const ByteSpan probe = serialize_view<K>(key);
+        const auto probe_expected = serialize_view<K>(key);
+        if (!probe_expected.has_value()) {
+            return nullptr;
+        }
+        const ByteSpan probe = *probe_expected;
 
         const auto decode_value = [](const ByteVec& bytes) -> std::unique_ptr<V> {
             auto decoded = decode<V>(bytes);

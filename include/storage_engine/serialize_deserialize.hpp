@@ -2,7 +2,6 @@
 
 #include "storage_engine/types.hpp"
 
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <expected>
@@ -17,23 +16,25 @@ concept Serializable =
     std::is_trivially_copyable_v<T> || std::is_same_v<T, std::string> || std::is_same_v<T, ByteVec>;
 
 template <Serializable T>
-uint32_t get_encoded_size(const T& value) {
+std::expected<uint32_t, std::string> get_encoded_size(const T& value) {
     if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, ByteVec>) {
         return static_cast<uint32_t>(value.size());
     }
 
-    else if constexpr (std::is_trivially_copyable_v<T>) {
-        return static_cast<uint32_t>(sizeof(T));
-    }
-
+    // trivially copyables
     else {
-        static_assert(sizeof(T) == 0, "Cannot calculate the length for that type!");
+        return static_cast<uint32_t>(sizeof(T));
     }
 }
 
 template <Serializable T>
 std::expected<ByteVec, std::string> encode(const T& value) {
-    const uint32_t value_length = get_encoded_size(value);
+    const auto value_length_expected = get_encoded_size(value);
+    if (!value_length_expected.has_value()) {
+        return std::unexpected(value_length_expected.error());
+    }
+    const uint32_t value_length = value_length_expected.value();
+
     constexpr size_t LENGTH_PREFIX_LENGTH = sizeof(uint32_t);
 
     ByteVec buffer(LENGTH_PREFIX_LENGTH + value_length);
@@ -43,10 +44,10 @@ std::expected<ByteVec, std::string> encode(const T& value) {
         if (value_length > 0) {
             std::memcpy(buffer.data() + LENGTH_PREFIX_LENGTH, value.data(), value_length);
         }
-    } else if constexpr (std::is_trivially_copyable_v<T>) {
+    }
+
+    else {
         std::memcpy(buffer.data() + LENGTH_PREFIX_LENGTH, &value, value_length);
-    } else {
-        return std::unexpected("No encoding described for that type!");
     }
 
     return buffer;
@@ -76,7 +77,9 @@ std::expected<T, std::string> decode(const ByteVec& encoded) {
             std::memcpy(buffer.data(), payload, value_length);
         }
         return buffer;
-    } else if constexpr (std::is_trivially_copyable_v<T>) {
+    }
+
+    else {
         if (value_length != sizeof(T)) {
             return std::unexpected("Encoded length does not match the type size");
         }
@@ -84,37 +87,31 @@ std::expected<T, std::string> decode(const ByteVec& encoded) {
         T buffer{};
         std::memcpy(&buffer, payload, sizeof(T));
         return buffer;
-    } else {
-        return std::unexpected("No decoding described for that type!");
     }
 }
 
 template <Serializable T>
-ByteVec serialize_value(const T& value) {
+std::expected<ByteVec, std::string> serialize_value(const T& value) {
     if constexpr (std::is_same_v<T, std::string>) {
         ByteVec buffer(value.size());
         std::memcpy(buffer.data(), reinterpret_cast<const char*>(value.data()), value.size());
         return buffer;
     }
 
-    else if constexpr (std::is_trivially_copyable_v<T>) {
+    else {
         ByteVec buffer(sizeof(value));
         std::memcpy(buffer.data(), reinterpret_cast<const char*>(&value), sizeof(value));
         return buffer;
     }
-
-    else {
-        static_assert(sizeof(T) == 0, "No serialization described for that type!");
-    }
 }
 
 template <Serializable T>
-ByteSpan serialize_view(const T& value) {
+std::expected<ByteSpan, std::string> serialize_view(const T& value) {
     if constexpr (std::is_same_v<T, std::string>) {
         return std::as_bytes(std::span{value});
     }
 
-    else if constexpr (std::is_trivially_copyable_v<T>) {
+    else {
         // std::span{&value, 1}: makes it a single element span
         return std::as_bytes(std::span{&value, 1});
     }
@@ -122,31 +119,26 @@ ByteSpan serialize_view(const T& value) {
 
 // prevents passing rvalues, which will die when the function ends
 template <Serializable T>
-ByteSpan serialize_view(T&& value) = delete;
+std::expected<ByteSpan, std::string> serialize_view(T&& value) = delete;
 
-// TODO: zero copy deserialization maybe
 template <Serializable T>
-T deserialize_value(const ByteVec& bytes, const uint32_t length) {
+std::expected<T, std::string> deserialize_value(const ByteVec& bytes, const uint32_t length) {
     if constexpr (std::is_same_v<T, std::string>) {
         std::string str(length, '\0');
         std::memcpy(str.data(), bytes.data(), str.size());
         return str;
     }
 
-    else if constexpr (std::is_trivially_copyable_v<T>) {
+    else {
         T value;
         std::memcpy(&value, bytes.data(), sizeof(T));
         return value;
-    }
-
-    else {
-        static_assert(sizeof(T) == 0, "No deserialization described for that type!");
     }
 }
 
 template <typename T>
 struct ViewOf {
-    using type = const T&;
+    using type = const T*;
 };
 
 template <>
@@ -158,21 +150,23 @@ template <typename T>
 using view_of_t = ViewOf<T>::type;
 
 template <typename T>
-view_of_t<T> deserialize_view(ByteSpan bytes) {
+std::expected<view_of_t<T>, std::string> deserialize_view(ByteSpan bytes) {
     if constexpr (std::is_same_v<T, std::string>) {
         return std::string_view{reinterpret_cast<const char*>(bytes.data()), bytes.size()};
     }
 
-    else if constexpr (std::is_trivially_copyable_v<T>) {
-        assert(bytes.size() >= sizeof(T));
-        return *reinterpret_cast<const T*>(bytes.data());
+    else {
+        if (bytes.size() < sizeof(T)) {
+            return std::unexpected("Buffer is smaller than the type size");
+        }
+        return reinterpret_cast<const T*>(bytes.data());
     }
 }
 
 template <Serializable T>
-view_of_t<T> deserialize_view(const ByteVec& bytes) {
+std::expected<view_of_t<T>, std::string> deserialize_view(const ByteVec& bytes) {
     return deserialize_view<T>(ByteSpan{bytes});
 }
 
 template <Serializable T>
-view_of_t<T> deserialize_view(ByteVec&&) = delete;
+std::expected<view_of_t<T>, std::string> deserialize_view(ByteVec&&) = delete;

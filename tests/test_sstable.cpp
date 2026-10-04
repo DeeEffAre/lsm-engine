@@ -3,10 +3,20 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
-#include <cstdint>
 #include <filesystem>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+template <typename T>
+ByteVec serialized_key(const T& value) {
+    auto encoded = serialize_value(value);
+    REQUIRE(encoded.has_value());
+    return *encoded;
+}
+
+} // namespace
 
 TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
     const std::string test_path = "test_sstable_data.bin";
@@ -27,19 +37,19 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         REQUIRE(fs::exists(test_path));
 
         // Disk lookup tests: keys are raw byte views, values are encoded records.
-        auto res1 = sstable->get(serialize_value<std::string>("k1"));
+        auto res1 = sstable->get(serialized_key<std::string>("k1"));
         REQUIRE(res1.has_value());
         const auto value1 = decode<std::string>(*res1);
         REQUIRE(value1.has_value());
         REQUIRE(*value1 == "v1");
 
-        auto res3 = sstable->get(serialize_value<std::string>("k3"));
+        auto res3 = sstable->get(serialized_key<std::string>("k3"));
         REQUIRE(res3.has_value());
         const auto value3 = decode<std::string>(*res3);
         REQUIRE(value3.has_value());
         REQUIRE(*value3 == "v3");
 
-        auto res_null = sstable->get(serialize_value<std::string>("non_existent"));
+        auto res_null = sstable->get(serialized_key<std::string>("non_existent"));
         REQUIRE_FALSE(res_null.has_value());
         REQUIRE(res_null.error() == SSTableError::NOT_FOUND);
     }
@@ -52,19 +62,19 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         auto sstable = db.get_db().write_sstable(test_path);
         REQUIRE(sstable.has_value());
 
-        auto res1 = sstable->get(serialize_value<int>(1));
+        auto res1 = sstable->get(serialized_key<int>(1));
         REQUIRE(res1.has_value());
         const auto value1 = decode<double>(*res1);
         REQUIRE(value1.has_value());
         REQUIRE(*value1 == 10.5);
 
-        auto res2 = sstable->get(serialize_value<int>(2));
+        auto res2 = sstable->get(serialized_key<int>(2));
         REQUIRE(res2.has_value());
         const auto value2 = decode<double>(*res2);
         REQUIRE(value2.has_value());
         REQUIRE(*value2 == 20.5);
 
-        auto res_null = sstable->get(serialize_value<int>(999));
+        auto res_null = sstable->get(serialized_key<int>(999));
         REQUIRE_FALSE(res_null.has_value());
         REQUIRE(res_null.error() == SSTableError::NOT_FOUND);
     }
@@ -88,7 +98,7 @@ TEST_CASE("SSTable error handling", "[sstable]") {
     SECTION("Missing file returns FILE_ERROR") {
         const SSTable table("test_sstable_missing_file.bin");
 
-        auto result = table.get(serialize_value<std::string>("key"));
+        auto result = table.get(serialized_key<std::string>("key"));
         REQUIRE_FALSE(result.has_value());
         REQUIRE(result.error() == SSTableError::FILE_ERROR);
     }
@@ -108,19 +118,19 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
         REQUIRE(full_encoded.has_value());
 
         Engine engine;
-        engine.put(serialize_value<std::string>("empty"), *empty_encoded);
-        engine.put(serialize_value<std::string>("full"), *full_encoded);
+        engine.put(serialized_key<std::string>("empty"), *empty_encoded);
+        engine.put(serialized_key<std::string>("full"), *full_encoded);
 
         auto table = engine.write_sstable(path);
         REQUIRE(table.has_value());
 
-        auto empty = table->get(serialize_value<std::string>("empty"));
+        auto empty = table->get(serialized_key<std::string>("empty"));
         REQUIRE(empty.has_value());
         const auto empty_decoded = decode<std::string>(*empty);
         REQUIRE(empty_decoded.has_value());
         REQUIRE(empty_decoded->empty());
 
-        auto full = table->get(serialize_value<std::string>("full"));
+        auto full = table->get(serialized_key<std::string>("full"));
         REQUIRE(full.has_value());
         const auto full_decoded = decode<std::string>(*full);
         REQUIRE(full_decoded.has_value());
@@ -133,7 +143,7 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
         auto table = engine.write_sstable(path);
         REQUIRE(table.has_value());
 
-        auto result = table->get(serialize_value<std::string>("anything"));
+        auto result = table->get(serialized_key<std::string>("anything"));
         REQUIRE_FALSE(result.has_value());
         REQUIRE(result.error() == SSTableError::NOT_FOUND);
     }
