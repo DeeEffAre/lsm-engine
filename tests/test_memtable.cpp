@@ -27,21 +27,24 @@ ByteVec encode_bytes(std::string_view text) {
 std::vector<std::pair<std::string, std::string>> parse_entries(const std::string& raw) {
     std::vector<std::pair<std::string, std::string>> entries;
 
+    const ByteSpan bytes{reinterpret_cast<const std::byte*>(raw.data()), raw.size()};
     std::size_t offset = 0;
     while (offset < raw.size()) {
-        uint32_t key_len = 0;
-        std::memcpy(&key_len, raw.data() + offset, sizeof(key_len));
-        offset += sizeof(key_len);
+        size_t key_prefix_size = 0;
+        const auto key_length = decode_leb128(bytes.subspan(offset), key_prefix_size);
+        REQUIRE(key_length.has_value());
+        offset += key_prefix_size;
 
-        std::string key(raw.data() + offset, key_len);
-        offset += key_len;
+        std::string key(raw.data() + offset, *key_length);
+        offset += *key_length;
 
-        uint32_t value_len = 0;
-        std::memcpy(&value_len, raw.data() + offset, sizeof(value_len));
-        offset += sizeof(value_len);
+        size_t value_prefix_size = 0;
+        const auto value_length = decode_leb128(bytes.subspan(offset), value_prefix_size);
+        REQUIRE(value_length.has_value());
+        offset += value_prefix_size;
 
-        std::string value(raw.data() + offset, value_len);
-        offset += value_len;
+        std::string value(raw.data() + offset, *value_length);
+        offset += *value_length;
 
         entries.emplace_back(std::move(key), std::move(value));
     }

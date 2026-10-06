@@ -257,28 +257,44 @@ TEST_CASE("Reading a dangling deserialize_view is undefined behavior", "[ub]") {
 }
 #endif
 
-TEST_CASE("encode prefixes the payload with its length", "[serialization]") {
+TEST_CASE("encode prefixes the payload with a LEB128 length", "[serialization]") {
     SECTION("std::string") {
         const std::string value = "hello";
         const auto encoded = encode(value);
         REQUIRE(encoded.has_value());
-        REQUIRE(encoded->size() == sizeof(uint32_t) + value.size());
 
-        uint32_t length = 0;
-        std::memcpy(&length, encoded->data(), sizeof(length));
-        REQUIRE(length == value.size());
-        REQUIRE(std::memcmp(encoded->data() + sizeof(uint32_t), value.data(), value.size()) == 0);
+        size_t prefix_size = 0;
+        const auto length = decode_leb128(*encoded, prefix_size);
+        REQUIRE(length.has_value());
+        REQUIRE(*length == value.size());
+        REQUIRE(encoded->size() == prefix_size + value.size());
+        REQUIRE(std::memcmp(encoded->data() + prefix_size, value.data(), value.size()) == 0);
     }
 
     SECTION("ByteVec") {
         const ByteVec value = serialized<std::string>("bytes");
         const auto encoded = encode<ByteVec>(value);
         REQUIRE(encoded.has_value());
-        REQUIRE(encoded->size() == sizeof(uint32_t) + value.size());
 
-        uint32_t length = 0;
-        std::memcpy(&length, encoded->data(), sizeof(length));
-        REQUIRE(length == value.size());
+        size_t prefix_size = 0;
+        const auto length = decode_leb128(*encoded, prefix_size);
+        REQUIRE(length.has_value());
+        REQUIRE(*length == value.size());
+        REQUIRE(encoded->size() == prefix_size + value.size());
+    }
+}
+
+TEST_CASE("LEB128 length coding round-trips", "[serialization]") {
+    for (const uint32_t value : {0U, 1U, 127U, 128U, 16383U, 16384U, 0xFFFFFFFFU}) {
+        const auto encoded = encode_leb128(value);
+        REQUIRE(encoded.size >= 1);
+        REQUIRE(encoded.size <= 5);
+
+        size_t bytes_read = 0;
+        const auto decoded = decode_leb128(ByteSpan{encoded.data}.first(encoded.size), bytes_read);
+        REQUIRE(decoded.has_value());
+        REQUIRE(*decoded == value);
+        REQUIRE(bytes_read == encoded.size);
     }
 }
 
@@ -295,7 +311,7 @@ TEST_CASE("encode and decode round-trip supported types", "[serialization]") {
     SECTION("empty std::string") {
         const auto encoded = encode<std::string>("");
         REQUIRE(encoded.has_value());
-        REQUIRE(encoded->size() == sizeof(uint32_t));
+        REQUIRE(encoded->size() == 1); // single-byte LEB128 prefix for length 0
 
         const auto decoded = decode<std::string>(*encoded);
         REQUIRE(decoded.has_value());
