@@ -22,7 +22,7 @@ public:
     ByteVec* get(ByteSpan key) noexcept;
 
     [[nodiscard]]
-    std::expected<SSTable, std::string> write_sstable(std::string path) const noexcept;
+    std::expected<SSTable, ErrorCode> write_sstable(std::string path) const noexcept;
 
     void clear_memtable() noexcept;
 };
@@ -88,7 +88,7 @@ public:
                 return decode_value(*result);
             }
 
-            if (result.error() == SSTableError::FILE_ERROR) {
+            if (result.error() == ErrorCode::FILE_ERROR) {
                 // NOTE: quitting from function may not be the best choice when a file error
                 // occurrs.
                 return nullptr;
@@ -105,7 +105,7 @@ public:
         auto sstable = db_.write_sstable(std::move(sstable_path));
 
         if (!sstable.has_value()) {
-            std::println(stderr, "Error while flushing memtable: {}", sstable.error());
+            std::println(stderr, "Error while flushing memtable: {}", to_string(sstable.error()));
             return false;
         }
 

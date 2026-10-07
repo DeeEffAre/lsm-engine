@@ -263,12 +263,11 @@ TEST_CASE("encode prefixes the payload with a LEB128 length", "[serialization]")
         const auto encoded = encode(value);
         REQUIRE(encoded.has_value());
 
-        size_t prefix_size = 0;
-        const auto length = decode_leb128(*encoded, prefix_size);
+        const auto length = decode_leb128(*encoded);
         REQUIRE(length.has_value());
-        REQUIRE(*length == value.size());
-        REQUIRE(encoded->size() == prefix_size + value.size());
-        REQUIRE(std::memcmp(encoded->data() + prefix_size, value.data(), value.size()) == 0);
+        REQUIRE(length->value == value.size());
+        REQUIRE(encoded->size() == length->bytes_read + value.size());
+        REQUIRE(std::memcmp(encoded->data() + length->bytes_read, value.data(), value.size()) == 0);
     }
 
     SECTION("ByteVec") {
@@ -276,11 +275,10 @@ TEST_CASE("encode prefixes the payload with a LEB128 length", "[serialization]")
         const auto encoded = encode<ByteVec>(value);
         REQUIRE(encoded.has_value());
 
-        size_t prefix_size = 0;
-        const auto length = decode_leb128(*encoded, prefix_size);
+        const auto length = decode_leb128(*encoded);
         REQUIRE(length.has_value());
-        REQUIRE(*length == value.size());
-        REQUIRE(encoded->size() == prefix_size + value.size());
+        REQUIRE(length->value == value.size());
+        REQUIRE(encoded->size() == length->bytes_read + value.size());
     }
 }
 
@@ -290,11 +288,10 @@ TEST_CASE("LEB128 length coding round-trips", "[serialization]") {
         REQUIRE(encoded.size >= 1);
         REQUIRE(encoded.size <= 5);
 
-        size_t bytes_read = 0;
-        const auto decoded = decode_leb128(ByteSpan{encoded.data}.first(encoded.size), bytes_read);
+        const auto decoded = decode_leb128(ByteSpan{encoded.data}.first(encoded.size));
         REQUIRE(decoded.has_value());
-        REQUIRE(*decoded == value);
-        REQUIRE(bytes_read == encoded.size);
+        REQUIRE(decoded->value == value);
+        REQUIRE(decoded->bytes_read == encoded.size);
     }
 }
 

@@ -28,25 +28,27 @@ std::vector<std::pair<std::string, std::string>> parse_entries(const std::string
     std::vector<std::pair<std::string, std::string>> entries;
 
     const ByteSpan bytes{reinterpret_cast<const std::byte*>(raw.data()), raw.size()};
-    std::size_t offset = 0;
-    while (offset < raw.size()) {
-        size_t key_prefix_size = 0;
-        const auto key_length = decode_leb128(bytes.subspan(offset), key_prefix_size);
-        REQUIRE(key_length.has_value());
-        offset += key_prefix_size;
+    ByteReader reader(bytes);
 
-        std::string key(raw.data() + offset, *key_length);
-        offset += *key_length;
+    while (true) {
+        auto key_length = reader.read_varint();
+        if (!key_length) {
+            REQUIRE(key_length.error() == ErrorCode::END_OF_STREAM);
+            break;
+        }
 
-        size_t value_prefix_size = 0;
-        const auto value_length = decode_leb128(bytes.subspan(offset), value_prefix_size);
+        auto key = reader.read_bytes(*key_length);
+        REQUIRE(key.has_value());
+
+        auto value_length = reader.read_varint();
         REQUIRE(value_length.has_value());
-        offset += value_prefix_size;
 
-        std::string value(raw.data() + offset, *value_length);
-        offset += *value_length;
+        auto value = reader.read_bytes(*value_length);
+        REQUIRE(value.has_value());
 
-        entries.emplace_back(std::move(key), std::move(value));
+        entries.emplace_back(
+            std::string(reinterpret_cast<const char*>(key->data()), key->size()),
+            std::string(reinterpret_cast<const char*>(value->data()), value->size()));
     }
 
     return entries;

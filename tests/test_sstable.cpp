@@ -51,7 +51,7 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
 
         auto res_null = sstable->get(serialized_key<std::string>("non_existent"));
         REQUIRE_FALSE(res_null.has_value());
-        REQUIRE(res_null.error() == SSTableError::NOT_FOUND);
+        REQUIRE(res_null.error() == ErrorCode::NOT_FOUND);
     }
 
     SECTION("SSTable Write and Read with Primitive Types (int, double)") {
@@ -76,7 +76,7 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
 
         auto res_null = sstable->get(serialized_key<int>(999));
         REQUIRE_FALSE(res_null.has_value());
-        REQUIRE(res_null.error() == SSTableError::NOT_FOUND);
+        REQUIRE(res_null.error() == ErrorCode::NOT_FOUND);
     }
 
     SECTION("Should return an error when write_sstable fails due to an invalid path") {
@@ -100,7 +100,7 @@ TEST_CASE("SSTable error handling", "[sstable]") {
 
         auto result = table.get(serialized_key<std::string>("key"));
         REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error() == SSTableError::FILE_ERROR);
+        REQUIRE(result.error() == ErrorCode::FILE_ERROR);
     }
 }
 
@@ -145,7 +145,7 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
 
         auto result = table->get(serialized_key<std::string>("anything"));
         REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error() == SSTableError::NOT_FOUND);
+        REQUIRE(result.error() == ErrorCode::NOT_FOUND);
     }
 
     if (fs::exists(path)) {

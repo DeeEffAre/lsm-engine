@@ -15,14 +15,14 @@ ByteVec* Engine::get(ByteSpan key) noexcept {
     return const_cast<ByteVec*>(std::as_const(memtable_).get(key)); // NOLINT
 }
 
-std::expected<SSTable, std::string> Engine::write_sstable(std::string path) const noexcept {
+std::expected<SSTable, ErrorCode> Engine::write_sstable(std::string path) const noexcept {
     std::ofstream file(path, std::ios::binary);
     if (!file.is_open()) {
-        return std::unexpected("Failed to open file");
+        return std::unexpected(ErrorCode::FILE_ERROR);
     }
 
     if (!memtable_.write_to(file)) {
-        return std::unexpected("Failed to write to file");
+        return std::unexpected(ErrorCode::FILE_ERROR);
     }
 
     return SSTable(std::move(path));

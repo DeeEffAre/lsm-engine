@@ -1,96 +1,57 @@
 #include "storage_engine/sstable.hpp"
 
+#include "storage_engine/length_encoding.hpp"
 #include "storage_engine/serialize_deserialize.hpp"
 #include "storage_engine/types.hpp"
 
-#include <array>
 #include <cstring>
 #include <expected>
 #include <fstream>
-#include <optional>
-
-namespace {
-
-struct LengthPrefix {
-    std::array<std::byte, 5> bytes{};
-    size_t size{0};
-    uint32_t value{0};
-};
-
-std::optional<LengthPrefix> read_length_prefix(std::istream& file) noexcept {
-    LengthPrefix prefix;
-
-    for (size_t i = 0; i < prefix.bytes.size(); ++i) {
-        char raw_byte = 0;
-        if (!file.get(raw_byte)) {
-            return std::nullopt;
-        }
-
-        const auto byte = static_cast<uint8_t>(raw_byte);
-        prefix.bytes[i] = static_cast<std::byte>(byte); // NOLINT
-        prefix.size++;
-
-        // continuation bit clear: the prefix ends here
-        if ((byte & 0x80) == 0) {
-            size_t bytes_read = 0;
-            auto decoded = decode_leb128(ByteSpan{prefix.bytes}.first(prefix.size), bytes_read);
-            if (!decoded.has_value()) {
-                return std::nullopt;
-            }
-            prefix.value = *decoded;
-            return prefix;
-        }
-    }
-
-    return std::nullopt; // more than 5 bytes: malformed
-}
-
-} // namespace
 
 SSTable::SSTable(std::string path) : path_(std::move(path)) {}
 
-std::expected<ByteVec, SSTableError> SSTable::get(ByteSpan key) const noexcept {
+std::expected<ByteVec, ErrorCode> SSTable::get(ByteSpan key) const noexcept {
     std::ifstream file(path_, std::ios::binary);
-
     if (!file.is_open()) {
-        return std::unexpected(SSTableError::FILE_ERROR);
+        return std::unexpected(ErrorCode::FILE_ERROR);
     }
 
+    StreamReader reader(file);
+
     while (true) {
-        auto key_prefix = read_length_prefix(file);
-        if (!key_prefix.has_value()) {
-            break; // clean end of file (or malformed prefix)
+        auto key_length = reader.read_varint();
+        if (!key_length) {
+            // At a record boundary with no bytes left -> normal "not found".
+            // Anything else (UNEXPECTED_END, TOO_MANY_BYTES) means corruption.
+            if (key_length.error() == ErrorCode::END_OF_STREAM) {
+                break;
+            }
+            return std::unexpected(key_length.error());
         }
 
-        ByteVec encoded_key(key_prefix->size + key_prefix->value);
-        std::memcpy(encoded_key.data(), key_prefix->bytes.data(), key_prefix->size);
-        if (!file.read(reinterpret_cast<char*>(encoded_key.data() + key_prefix->size),
-                       key_prefix->value)) {
-            return std::unexpected(SSTableError::FILE_ERROR);
+        auto stored_key = reader.read_bytes(*key_length);
+        if (!stored_key) {
+            return std::unexpected(stored_key.error());
         }
 
-        auto value_prefix = read_length_prefix(file);
-        if (!value_prefix.has_value()) {
-            return std::unexpected(SSTableError::FILE_ERROR);
-        }
-
-        auto stored_key = decode<ByteVec>(encoded_key);
-        if (!stored_key.has_value()) {
-            return std::unexpected(SSTableError::FILE_ERROR);
+        auto value_length = reader.read_varint();
+        if (!value_length) {
+            return std::unexpected(value_length.error());
         }
 
         if (std::ranges::equal(*stored_key, key)) {
-            ByteVec encoded_value(value_prefix->size + value_prefix->value);
-            std::memcpy(encoded_value.data(), value_prefix->bytes.data(), value_prefix->size);
-            if (!file.read(reinterpret_cast<char*>(encoded_value.data() + value_prefix->size),
-                           value_prefix->value)) {
-                return std::unexpected(SSTableError::FILE_ERROR);
+            auto payload = reader.read_bytes(*value_length);
+            if (!payload) {
+                return std::unexpected(payload.error());
             }
-            return encoded_value;
+            // Database expects an encoded (length-prefixed) value record.
+            return encode<ByteVec>(*payload);
         }
 
-        file.seekg(value_prefix->value, std::ios::cur); // skip on mismatch
+        if (!reader.skip(*value_length)) {
+            return std::unexpected(ErrorCode::FILE_ERROR);
+        }
     }
 
-    return std::unexpected(SSTableError::NOT_FOUND);
+    return std::unexpected(ErrorCode::NOT_FOUND);
 }

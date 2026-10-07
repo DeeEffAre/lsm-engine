@@ -4,6 +4,7 @@ add_library(storage_engine_core STATIC
     memtable.cpp
     sstable.cpp
     engine.cpp
+    length_encoding.cpp
 )
 
 myproject_target_setup(storage_engine_core)
