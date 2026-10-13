@@ -8,6 +8,7 @@ add_executable(unit_tests
     test_memtable.cpp
     test_serialize_deserialize.cpp
     test_sstable.cpp
+    test_wal.cpp
 )
 
 myproject_target_setup(unit_tests)

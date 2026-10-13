@@ -53,8 +53,8 @@ constexpr EncodedVarint encode_leb128(uint32_t value) noexcept {
     EncodedVarint output{};
 
     while (output.size < 5) {
-        uint8_t byte = value & 0x7F; // lowest 7 bit;
-        value >>= 7;                 // shift 7 for continuation bit
+        const uint8_t byte = value & 0x7F; // lowest 7 bit;
+        value >>= 7;                       // shift 7 for continuation bit
 
         if (value == 0) {
             output.data[output.size++] = std::byte{byte}; // NOLINT

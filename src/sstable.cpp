@@ -1,7 +1,6 @@
 #include "storage_engine/sstable.hpp"
 
 #include "storage_engine/length_encoding.hpp"
-#include "storage_engine/serialize_deserialize.hpp"
 #include "storage_engine/types.hpp"
 
 #include <cstring>
@@ -16,7 +15,7 @@ std::expected<ByteVec, ErrorCode> SSTable::get(ByteSpan key) const noexcept {
         return std::unexpected(ErrorCode::FILE_ERROR);
     }
 
-    StreamReader reader(file);
+    StreamReader reader{file};
 
     while (true) {
         auto key_length = reader.read_varint();
@@ -44,8 +43,7 @@ std::expected<ByteVec, ErrorCode> SSTable::get(ByteSpan key) const noexcept {
             if (!payload) {
                 return std::unexpected(payload.error());
             }
-            // Database expects an encoded (length-prefixed) value record.
-            return encode<ByteVec>(*payload);
+            return *payload;
         }
 
         if (!reader.skip(*value_length)) {

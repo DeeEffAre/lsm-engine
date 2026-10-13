@@ -10,11 +10,11 @@ public:
     Memtable();
     ~Memtable();
     Memtable(const Memtable&) = delete;
-    Memtable(Memtable&&) = delete;
     Memtable& operator=(const Memtable&) = delete;
-    Memtable& operator=(Memtable&&) = delete;
+    Memtable(Memtable&&) noexcept;
+    Memtable& operator=(Memtable&&) noexcept;
 
-    void put(const ByteVec& key, ByteVec value) noexcept;
+    void put(ByteVec key, ByteVec value) noexcept;
 
     [[nodiscard]]
     const ByteVec* get(ByteSpan key) const noexcept;

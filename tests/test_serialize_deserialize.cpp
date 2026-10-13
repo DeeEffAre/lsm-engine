@@ -365,26 +365,28 @@ TEST_CASE("encode and decode round-trip supported types", "[serialization]") {
 
 TEST_CASE("decode rejects malformed input", "[serialization]") {
     SECTION("Buffer smaller than the length prefix") {
-        const ByteVec buffer{std::byte{0x01}};
+        const EncodedByteVec buffer{ByteVec{std::byte{0x01}}};
 
         const auto decoded = decode<std::string>(buffer);
         REQUIRE_FALSE(decoded.has_value());
     }
 
     SECTION("Declared length exceeds the buffer") {
-        ByteVec buffer(sizeof(uint32_t) + 2, std::byte{0});
+        ByteVec bytes(sizeof(uint32_t) + 2, std::byte{0});
         const uint32_t declared = 10;
-        std::memcpy(buffer.data(), &declared, sizeof(declared));
+        std::memcpy(bytes.data(), &declared, sizeof(declared));
 
+        const EncodedByteVec buffer{std::move(bytes)};
         const auto decoded = decode<std::string>(buffer);
         REQUIRE_FALSE(decoded.has_value());
     }
 
     SECTION("Trivially copyable type with mismatched length") {
-        ByteVec buffer(sizeof(uint32_t) + sizeof(uint16_t), std::byte{0});
+        ByteVec bytes(sizeof(uint32_t) + sizeof(uint16_t), std::byte{0});
         const uint32_t declared = sizeof(uint16_t);
-        std::memcpy(buffer.data(), &declared, sizeof(declared));
+        std::memcpy(bytes.data(), &declared, sizeof(declared));
 
+        const EncodedByteVec buffer{std::move(bytes)};
         const auto decoded = decode<uint32_t>(buffer);
         REQUIRE_FALSE(decoded.has_value());
     }

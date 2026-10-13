@@ -1,10 +1,12 @@
 #include "storage_engine/engine.hpp"
 
+#include "storage_engine/memtable.hpp"
+
 #include <expected>
 #include <fstream>
 
-void Engine::put(const ByteVec& key, ByteVec value) noexcept {
-    memtable_.put(key, std::move(value));
+void Engine::put(ByteVec key, ByteVec value) noexcept {
+    memtable_.put(std::move(key), std::move(value));
 }
 
 const ByteVec* Engine::get(ByteSpan key) const noexcept {
@@ -27,6 +29,10 @@ std::expected<SSTable, ErrorCode> Engine::write_sstable(std::string path) const 
 
     return SSTable(std::move(path));
 };
+
+void Engine::restore(Memtable&& table_to_load) noexcept {
+    memtable_ = std::move(table_to_load);
+}
 
 void Engine::clear_memtable() noexcept {
     memtable_.clear();

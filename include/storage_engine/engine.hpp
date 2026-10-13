@@ -4,6 +4,7 @@
 #include "storage_engine/serialize_deserialize.hpp"
 #include "storage_engine/sstable.hpp"
 #include "storage_engine/types.hpp"
+#include "storage_engine/wal.hpp"
 
 #include <expected>
 #include <ranges>
@@ -12,7 +13,7 @@ class Engine {
     Memtable memtable_;
 
 public:
-    void put(const ByteVec& key, ByteVec value) noexcept;
+    void put(ByteVec key, ByteVec value) noexcept;
 
     // returns `nullptr` on error
     [[nodiscard]]
@@ -24,33 +25,54 @@ public:
     [[nodiscard]]
     std::expected<SSTable, ErrorCode> write_sstable(std::string path) const noexcept;
 
+    void restore(Memtable&& table_to_load) noexcept;
+
     void clear_memtable() noexcept;
 };
 
 // an abstract layer for StorageEngine class with generic types
 template <typename K, typename V>
 class Database {
-    Engine db_{};
     std::vector<SSTable> sstables_;
-    int max_memtable_size_;
-    int memtable_size_{0};
-    int sstable_counter_{0};
+    std::string wal_path_{"db.wal"};
+    Wal wal_;
+    Engine db_{};
+    size_t max_memtable_size_;
+    size_t memtable_size_{0};
+    size_t sstable_counter_{0};
+
+    void clear_memtable() noexcept { db_.clear_memtable(); }
+    void clear_wal() noexcept { wal_.clear(wal_path_); }
 
 public:
-    Database(int max_memtable_size) : max_memtable_size_(max_memtable_size) {}
+    Database(size_t max_memtable_size) : wal_(wal_path_), max_memtable_size_(max_memtable_size) {
+        auto wal_replay = Wal::replay_wal(wal_path_);
+
+        if (wal_replay.has_value()) {
+            // update memtable size counter and memtable itself
+            memtable_size_ = wal_replay->record_count;
+            db_.restore(std::move(wal_replay->memtable));
+        } else {
+            std::println(stderr, "{}", to_string(wal_replay.error()));
+        }
+    }
 
     bool put(const K& key, const V& value) noexcept {
-        auto value_encoded = encode<V>(value);
-        if (!value_encoded.has_value()) {
+        auto value_serialized = serialize_value<V>(value);
+        if (!value_serialized.has_value()) {
             return false;
         }
 
-        auto key_encoded = serialize_value<K>(key);
-        if (!key_encoded.has_value()) {
+        auto key_serialized = serialize_value<K>(key);
+        if (!key_serialized.has_value()) {
             return false;
         }
 
-        db_.put(*key_encoded, std::move(*value_encoded));
+        if (!wal_.write(*key_serialized, *value_serialized)) {
+            return false;
+        };
+
+        db_.put(std::move(*key_serialized), std::move(*value_serialized));
         memtable_size_++;
 
         if (memtable_size_ >= max_memtable_size_) {
@@ -70,7 +92,7 @@ public:
         const ByteSpan probe = *probe_expected;
 
         const auto decode_value = [](const ByteVec& bytes) -> std::unique_ptr<V> {
-            auto decoded = decode<V>(bytes);
+            auto decoded = deserialize_value<V>(bytes, static_cast<uint32_t>(bytes.size()));
             if (!decoded.has_value()) {
                 return nullptr;
             }
@@ -98,10 +120,14 @@ public:
         return nullptr;
     }
 
-    void clear_memtable() noexcept { db_.clear_memtable(); }
-
     bool flush_memtable() noexcept {
-        std::string sstable_path = std::format("data-{}.sstable", sstable_counter_);
+        // std::format alternative which does not throws an exception
+        std::array<char, 64> buffer{};
+        auto result =
+            std::format_to_n(buffer.data(), buffer.size(), "data-{}.sstable", sstable_counter_);
+
+        std::string sstable_path(buffer.data(), static_cast<size_t>(result.size));
+
         auto sstable = db_.write_sstable(std::move(sstable_path));
 
         if (!sstable.has_value()) {
@@ -113,6 +139,7 @@ public:
         sstable_counter_++;
         memtable_size_ = 0;
         clear_memtable();
+        clear_wal();
 
         return true;
     }

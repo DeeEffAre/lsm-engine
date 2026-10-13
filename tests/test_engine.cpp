@@ -28,16 +28,16 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
     const std::string path = "test_engine_data.bin";
     remove_if_exists(path);
 
-    const auto value_encoded = encode<std::string>("value");
-    REQUIRE(value_encoded.has_value());
+    const auto value_serialized = serialize_value<std::string>("value");
+    REQUIRE(value_serialized.has_value());
 
     Engine engine;
-    engine.put(serialized_key<std::string>("key"), *value_encoded);
+    engine.put(serialized_key<std::string>("key"), *value_serialized);
 
     const Engine& const_engine = engine;
     const ByteVec* value = const_engine.get(serialized_key<std::string>("key"));
     REQUIRE(value != nullptr);
-    const auto decoded = decode<std::string>(*value);
+    const auto decoded = deserialize_value<std::string>(*value, static_cast<uint32_t>(value->size()));
     REQUIRE(decoded.has_value());
     REQUIRE(*decoded == "value");
     REQUIRE(const_engine.get(serialized_key<std::string>("missing")) == nullptr);
@@ -48,7 +48,8 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
 
     auto from_disk = table->get(serialized_key<std::string>("key"));
     REQUIRE(from_disk.has_value());
-    const auto from_disk_decoded = decode<std::string>(*from_disk);
+    const auto from_disk_decoded =
+        deserialize_value<std::string>(*from_disk, static_cast<uint32_t>(from_disk->size()));
     REQUIRE(from_disk_decoded.has_value());
     REQUIRE(*from_disk_decoded == "value");
 
@@ -56,6 +57,8 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
 }
 
 TEST_CASE("Database typed access", "[engine]") {
+    remove_if_exists("db.wal");
+
     SECTION("Typed access works through the Database wrapper") {
         Database<int, double> db{100};
         db.put(1, 10.5);
@@ -70,9 +73,12 @@ TEST_CASE("Database typed access", "[engine]") {
         Database<std::string, std::string> db{100};
         REQUIRE(db.put("key", "value"));
     }
+
+    remove_if_exists("db.wal");
 }
 
 TEST_CASE("Database flush behavior", "[engine][flush]") {
+    remove_if_exists("db.wal");
     remove_if_exists("data-0.sstable");
     remove_if_exists("data-1.sstable");
 
@@ -162,6 +168,85 @@ TEST_CASE("Database flush behavior", "[engine][flush]") {
         REQUIRE(*a == "1");
     }
 
+    remove_if_exists("db.wal");
     remove_if_exists("data-0.sstable");
     remove_if_exists("data-1.sstable");
+}
+
+TEST_CASE("Database recovers committed writes from the WAL", "[engine][wal]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+
+    SECTION("Committed writes survive a restart") {
+        {
+            Database<std::string, std::string> db{100};
+            REQUIRE(db.put("key", "value"));
+        }
+
+        Database<std::string, std::string> reopened{100};
+
+        auto value = reopened.get("key");
+        REQUIRE(value != nullptr);
+        REQUIRE(*value == "value");
+        REQUIRE(reopened.get("missing") == nullptr);
+    }
+
+    SECTION("Recovery keeps the latest value of an overwritten key") {
+        {
+            Database<std::string, std::string> db{100};
+            REQUIRE(db.put("key", "old"));
+            REQUIRE(db.put("key", "new"));
+        }
+
+        Database<std::string, std::string> reopened{100};
+
+        auto value = reopened.get("key");
+        REQUIRE(value != nullptr);
+        REQUIRE(*value == "new");
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+}
+
+TEST_CASE("Flushing the memtable clears the WAL", "[engine][wal][flush]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+
+    Database<std::string, std::string> db{2};
+    REQUIRE(db.put("a", "1"));
+    REQUIRE(db.put("b", "2")); // threshold reached -> flush
+
+    REQUIRE(fs::exists("data-0.sstable"));
+    REQUIRE(fs::exists("db.wal"));
+    REQUIRE(fs::file_size("db.wal") == 0);
+
+    // Values must still be reachable, now through the sstable.
+    auto a = db.get("a");
+    REQUIRE(a != nullptr);
+    REQUIRE(*a == "1");
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+}
+
+TEST_CASE("Recovered entries count towards the memtable threshold", "[engine][wal][flush]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+
+    {
+        Database<std::string, std::string> db{3};
+        REQUIRE(db.put("a", "1"));
+        REQUIRE(db.put("b", "2"));
+        REQUIRE_FALSE(fs::exists("data-0.sstable"));
+    }
+
+    {
+        Database<std::string, std::string> db{3}; // restores 2 entries from the WAL
+        REQUIRE(db.put("c", "3"));                // third entry reaches the threshold
+        REQUIRE(fs::exists("data-0.sstable"));
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
 }

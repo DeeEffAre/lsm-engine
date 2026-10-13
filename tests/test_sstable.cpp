@@ -25,6 +25,9 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
     if (fs::exists(test_path)) {
         fs::remove(test_path);
     }
+    if (fs::exists("db.wal")) {
+        fs::remove("db.wal");
+    }
 
     SECTION("SSTable Write and Read with Complex Types (std::string)") {
         Database<std::string, std::string> db{100};
@@ -36,16 +39,18 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         REQUIRE(sstable.has_value());
         REQUIRE(fs::exists(test_path));
 
-        // Disk lookup tests: keys are raw byte views, values are encoded records.
+        // Disk lookup tests: both keys and values are raw (serialized) bytes.
         auto res1 = sstable->get(serialized_key<std::string>("k1"));
         REQUIRE(res1.has_value());
-        const auto value1 = decode<std::string>(*res1);
+        const auto value1 =
+            deserialize_value<std::string>(*res1, static_cast<uint32_t>(res1->size()));
         REQUIRE(value1.has_value());
         REQUIRE(*value1 == "v1");
 
         auto res3 = sstable->get(serialized_key<std::string>("k3"));
         REQUIRE(res3.has_value());
-        const auto value3 = decode<std::string>(*res3);
+        const auto value3 =
+            deserialize_value<std::string>(*res3, static_cast<uint32_t>(res3->size()));
         REQUIRE(value3.has_value());
         REQUIRE(*value3 == "v3");
 
@@ -64,13 +69,15 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
 
         auto res1 = sstable->get(serialized_key<int>(1));
         REQUIRE(res1.has_value());
-        const auto value1 = decode<double>(*res1);
+        const auto value1 =
+            deserialize_value<double>(*res1, static_cast<uint32_t>(res1->size()));
         REQUIRE(value1.has_value());
         REQUIRE(*value1 == 10.5);
 
         auto res2 = sstable->get(serialized_key<int>(2));
         REQUIRE(res2.has_value());
-        const auto value2 = decode<double>(*res2);
+        const auto value2 =
+            deserialize_value<double>(*res2, static_cast<uint32_t>(res2->size()));
         REQUIRE(value2.has_value());
         REQUIRE(*value2 == 20.5);
 
@@ -92,6 +99,9 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
     if (fs::exists(test_path)) {
         fs::remove(test_path);
     }
+    if (fs::exists("db.wal")) {
+        fs::remove("db.wal");
+    }
 }
 
 TEST_CASE("SSTable error handling", "[sstable]") {
@@ -112,27 +122,29 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
     }
 
     SECTION("Empty values are returned as found entries") {
-        const auto empty_encoded = encode<std::string>("");
-        const auto full_encoded = encode<std::string>("value");
-        REQUIRE(empty_encoded.has_value());
-        REQUIRE(full_encoded.has_value());
+        const auto empty_serialized = serialize_value<std::string>("");
+        const auto full_serialized = serialize_value<std::string>("value");
+        REQUIRE(empty_serialized.has_value());
+        REQUIRE(full_serialized.has_value());
 
         Engine engine;
-        engine.put(serialized_key<std::string>("empty"), *empty_encoded);
-        engine.put(serialized_key<std::string>("full"), *full_encoded);
+        engine.put(serialized_key<std::string>("empty"), *empty_serialized);
+        engine.put(serialized_key<std::string>("full"), *full_serialized);
 
         auto table = engine.write_sstable(path);
         REQUIRE(table.has_value());
 
         auto empty = table->get(serialized_key<std::string>("empty"));
         REQUIRE(empty.has_value());
-        const auto empty_decoded = decode<std::string>(*empty);
+        const auto empty_decoded =
+            deserialize_value<std::string>(*empty, static_cast<uint32_t>(empty->size()));
         REQUIRE(empty_decoded.has_value());
         REQUIRE(empty_decoded->empty());
 
         auto full = table->get(serialized_key<std::string>("full"));
         REQUIRE(full.has_value());
-        const auto full_decoded = decode<std::string>(*full);
+        const auto full_decoded =
+            deserialize_value<std::string>(*full, static_cast<uint32_t>(full->size()));
         REQUIRE(full_decoded.has_value());
         REQUIRE(*full_decoded == "value");
     }

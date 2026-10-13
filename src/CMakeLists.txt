@@ -5,6 +5,7 @@ add_library(storage_engine_core STATIC
     sstable.cpp
     engine.cpp
     length_encoding.cpp
+    wal.cpp
 )
 
 myproject_target_setup(storage_engine_core)

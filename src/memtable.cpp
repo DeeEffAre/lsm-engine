@@ -78,7 +78,7 @@ public:
 
     void clear() noexcept { clear_nodes(); }
 
-    void insert_or_assign(const ByteVec& key, ByteVec value) {
+    void insert_or_assign(ByteVec key, ByteVec value) {
         std::vector<Node*> update(MAX_LEVEL, nullptr);
         Node* current = head_;
 
@@ -98,7 +98,7 @@ public:
             return;
         }
 
-        int new_level = random_level();
+        const int new_level = random_level();
         if (new_level > level_) {
             for (int i = level_; i < new_level; ++i) {
                 update[static_cast<size_t>(i)] = head_;
@@ -106,7 +106,7 @@ public:
             level_ = new_level;
         }
 
-        Node* new_node = new Node(key, std::move(value), new_level);
+        Node* new_node = new Node(std::move(key), std::move(value), new_level);
         for (int i = 0; i < new_level; ++i) {
             new_node->forward[static_cast<size_t>(i)] =
                 update[static_cast<size_t>(i)]->forward[static_cast<size_t>(i)];
@@ -150,8 +150,15 @@ struct Memtable::Impl {
 Memtable::Memtable() : pimpl_(std::make_unique<Impl>()) {}
 Memtable::~Memtable() = default;
 
-void Memtable::put(const ByteVec& key, ByteVec value) noexcept {
-    pimpl_->data_.insert_or_assign(key, std::move(value));
+// Because we use pimpl pattern we cannot declare how to move Memtable class in .hpp
+// So we only declare that `move constructors are present but the implementations in .cpp` in .hpp
+// If we try to declare the impl in .hpp we can't know the size of pimpl_ and because of that
+// compiler gives an error
+Memtable::Memtable(Memtable&&) noexcept = default;
+Memtable& Memtable::operator=(Memtable&&) noexcept = default;
+
+void Memtable::put(ByteVec key, ByteVec value) noexcept {
+    pimpl_->data_.insert_or_assign(std::move(key), std::move(value));
 }
 
 const ByteVec* Memtable::get(ByteSpan key) const noexcept {
@@ -164,18 +171,16 @@ ByteVec* Memtable::get(ByteSpan key) noexcept {
 
 bool Memtable::write_to(std::ostream& stream) const noexcept {
     for (auto* node = pimpl_->data_.begin(); node != nullptr; node = node->forward[0]) {
-        // Keys are stored raw and framed here; values are stored already encoded.
         auto encoded_key = encode<ByteVec>(node->key);
-        if (!encoded_key.has_value()) {
+        auto encoded_value = encode<ByteVec>(node->value);
+        if (!encoded_key.has_value() || !encoded_value.has_value()) {
             return false;
         }
 
-        const auto& value = node->value;
-
         stream.write(reinterpret_cast<const char*>(encoded_key->data()),
                      static_cast<std::streamsize>(encoded_key->size()));
-        stream.write(reinterpret_cast<const char*>(value.data()),
-                     static_cast<std::streamsize>(value.size()));
+        stream.write(reinterpret_cast<const char*>(encoded_value->data()),
+                     static_cast<std::streamsize>(encoded_value->size()));
     }
 
     return static_cast<bool>(stream);

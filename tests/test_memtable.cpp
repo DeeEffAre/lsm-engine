@@ -2,8 +2,8 @@
 #include "storage_engine/memtable.hpp"
 
 #include <catch2/catch_test_macros.hpp>
-#include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -12,23 +12,19 @@
 
 namespace {
 
+namespace fs = std::filesystem;
+
 ByteVec to_bytes(std::string_view text) {
     ByteVec bytes(text.size());
     std::memcpy(bytes.data(), text.data(), text.size());
     return bytes;
 }
 
-ByteVec encode_bytes(std::string_view text) {
-    auto encoded = encode<ByteVec>(to_bytes(text));
-    REQUIRE(encoded.has_value());
-    return *encoded;
-}
-
-std::vector<std::pair<std::string, std::string>> parse_entries(const std::string& raw) {
+std::vector<std::pair<std::string, std::string>> parse_entries(const std::string& raw) { // NOLINT
     std::vector<std::pair<std::string, std::string>> entries;
 
     const ByteSpan bytes{reinterpret_cast<const std::byte*>(raw.data()), raw.size()};
-    ByteReader reader(bytes);
+    ByteReader reader{bytes};
 
     while (true) {
         auto key_length = reader.read_varint();
@@ -57,6 +53,10 @@ std::vector<std::pair<std::string, std::string>> parse_entries(const std::string
 } // namespace
 
 TEST_CASE("Memtable Basic Operations", "[memtable]") {
+    if (fs::exists("db.wal")) {
+        fs::remove("db.wal");
+    }
+
     Database<std::string, std::string> db{100};
 
     SECTION("Empty memtable should return nullptr") {
@@ -83,6 +83,10 @@ TEST_CASE("Memtable Basic Operations", "[memtable]") {
         auto v = db.get("key");
         REQUIRE(v != nullptr);
         REQUIRE(*v == "new_value");
+    }
+
+    if (fs::exists("db.wal")) {
+        fs::remove("db.wal");
     }
 }
 
@@ -153,10 +157,10 @@ TEST_CASE("Memtable byte-level operations", "[memtable]") {
 TEST_CASE("Memtable write_to", "[memtable]") {
     SECTION("Writes entries in lexicographic key order with length prefixes") {
         Memtable memtable;
-        memtable.put(to_bytes("z"), encode_bytes("26"));
-        memtable.put(to_bytes("aa"), encode_bytes("1"));
-        memtable.put(to_bytes("b"), encode_bytes("2"));
-        memtable.put(to_bytes("c"), encode_bytes("3"));
+        memtable.put(to_bytes("z"), to_bytes("26"));
+        memtable.put(to_bytes("aa"), to_bytes("1"));
+        memtable.put(to_bytes("b"), to_bytes("2"));
+        memtable.put(to_bytes("c"), to_bytes("3"));
 
         std::ostringstream stream(std::ios::out | std::ios::binary);
         REQUIRE(memtable.write_to(stream));

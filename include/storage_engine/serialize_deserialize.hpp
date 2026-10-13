@@ -30,7 +30,7 @@ std::expected<uint32_t, ErrorCode> get_encoded_size(const T& value) noexcept {
 }
 
 template <Serializable T>
-std::expected<ByteVec, ErrorCode> encode(const T& value) noexcept {
+std::expected<EncodedByteVec, ErrorCode> encode(const T& value) noexcept {
     const auto value_length_expected = get_encoded_size(value);
     if (!value_length_expected.has_value()) {
         return std::unexpected(value_length_expected.error());
@@ -38,7 +38,7 @@ std::expected<ByteVec, ErrorCode> encode(const T& value) noexcept {
     const uint32_t value_length = *value_length_expected;
     const EncodedVarint length_prefix = encode_leb128(value_length);
 
-    ByteVec buffer(length_prefix.size + value_length);
+    EncodedByteVec buffer{ByteVec(length_prefix.size + value_length)};
     std::memcpy(buffer.data(), length_prefix.data.data(), length_prefix.size);
 
     if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, ByteVec>) {
@@ -55,8 +55,8 @@ std::expected<ByteVec, ErrorCode> encode(const T& value) noexcept {
 }
 
 template <Serializable T>
-std::expected<T, ErrorCode> decode(const ByteVec& encoded) noexcept {
-    ByteReader reader(encoded);
+std::expected<T, ErrorCode> decode(const EncodedByteVec& encoded) noexcept {
+    ByteReader reader{encoded};
 
     auto value_length = reader.read_varint();
     if (!value_length.has_value()) {
