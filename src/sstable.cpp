@@ -7,8 +7,6 @@
 #include <expected>
 #include <fstream>
 
-SSTable::SSTable(std::string path) : path_(std::move(path)) {}
-
 std::expected<ByteVec, ErrorCode> SSTable::get(ByteSpan key) const noexcept {
     std::ifstream file(path_, std::ios::binary);
     if (!file.is_open()) {

@@ -23,7 +23,7 @@ public:
     ByteVec* get(ByteSpan key) noexcept;
 
     [[nodiscard]]
-    std::expected<SSTable, ErrorCode> write_sstable(std::string path) const noexcept;
+    std::expected<SSTable, ErrorCode> write_sstable(const char* path) const noexcept;
 
     void restore(Memtable&& table_to_load) noexcept;
 
@@ -123,12 +123,9 @@ public:
     bool flush_memtable() noexcept {
         // std::format alternative which does not throws an exception
         std::array<char, 64> buffer{};
-        auto result =
-            std::format_to_n(buffer.data(), buffer.size(), "data-{}.sstable", sstable_counter_);
+        std::format_to_n(buffer.data(), buffer.size(), "data-{}.sstable", sstable_counter_);
 
-        std::string sstable_path(buffer.data(), static_cast<size_t>(result.size));
-
-        auto sstable = db_.write_sstable(std::move(sstable_path));
+        auto sstable = db_.write_sstable(buffer.data());
 
         if (!sstable.has_value()) {
             std::println(stderr, "Error while flushing memtable: {}", to_string(sstable.error()));
