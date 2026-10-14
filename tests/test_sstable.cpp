@@ -35,7 +35,7 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         db.put("k2", "v2");
         db.put("k3", "v3");
 
-        auto sstable = db.get_db().write_sstable(test_path);
+        auto sstable = db.get_db().write_sstable(test_path.c_str());
         REQUIRE(sstable.has_value());
         REQUIRE(fs::exists(test_path));
 
@@ -64,7 +64,7 @@ TEST_CASE("SSTable and Serialization Mechanism", "[sstable]") {
         db.put(1, 10.5);
         db.put(2, 20.5);
 
-        auto sstable = db.get_db().write_sstable(test_path);
+        auto sstable = db.get_db().write_sstable(test_path.c_str());
         REQUIRE(sstable.has_value());
 
         auto res1 = sstable->get(serialized_key<int>(1));
@@ -131,7 +131,7 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
         engine.put(serialized_key<std::string>("empty"), *empty_serialized);
         engine.put(serialized_key<std::string>("full"), *full_serialized);
 
-        auto table = engine.write_sstable(path);
+        auto table = engine.write_sstable(path.c_str());
         REQUIRE(table.has_value());
 
         auto empty = table->get(serialized_key<std::string>("empty"));
@@ -152,7 +152,7 @@ TEST_CASE("SSTable handles empty values and empty tables", "[sstable]") {
     SECTION("Flushing an empty memtable yields a table where every key is missing") {
         Engine engine;
 
-        auto table = engine.write_sstable(path);
+        auto table = engine.write_sstable(path.c_str());
         REQUIRE(table.has_value());
 
         auto result = table->get(serialized_key<std::string>("anything"));

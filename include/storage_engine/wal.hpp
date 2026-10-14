@@ -8,18 +8,22 @@
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <system_error>
 
 struct WalReplayResult {
     Memtable memtable;
-    size_t record_count{0};
+    size_t record_count{};
+    size_t bytes_consumed{};
+    bool had_torn_tail{false};
 };
 
 // wal is for memtable recovery, when a memtable flush occurs wal should be cleared
 class Wal {
     std::ofstream file_;
+    std::string path_;
 
 public:
-    Wal(const std::string& path) : file_(path, std::ios::out | std::ios::app) {
+    Wal(const std::string& path) : file_(path, std::ios::out | std::ios::app), path_(path) {
         if (!file_.is_open()) {
             std::println(stderr, "Failed to open file: {}", path);
         }
@@ -46,16 +50,18 @@ public:
     }
 
     static std::expected<WalReplayResult, ErrorCode> replay_wal(const std::string& path) noexcept;
-    void clear(const std::string& path) noexcept {
+
+    void truncate_to(size_t truncate_from) noexcept {
         file_.close();
 
-        // empty the file
         std::error_code ec;
-        std::filesystem::resize_file(path, 0, ec);
+        std::filesystem::resize_file(path_, truncate_from, ec);
 
-        file_ = std::ofstream{path, std::ios::out | std::ios::app};
+        file_ = std::ofstream{path_, std::ios::out | std::ios::app};
         if (!file_.is_open()) {
-            std::println(stderr, "Failed to open file: {}", path);
+            std::println(stderr, "Failed to open file: {}", path_);
         }
     }
+
+    void clear() noexcept { truncate_to(0); }
 };

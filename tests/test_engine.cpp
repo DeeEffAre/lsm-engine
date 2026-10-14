@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -42,7 +43,7 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
     REQUIRE(*decoded == "value");
     REQUIRE(const_engine.get(serialized_key<std::string>("missing")) == nullptr);
 
-    auto table = engine.write_sstable(path);
+    auto table = engine.write_sstable(path.c_str());
     REQUIRE(table.has_value());
     REQUIRE(fs::exists(path));
 
@@ -245,6 +246,54 @@ TEST_CASE("Recovered entries count towards the memtable threshold", "[engine][wa
         Database<std::string, std::string> db{3}; // restores 2 entries from the WAL
         REQUIRE(db.put("c", "3"));                // third entry reaches the threshold
         REQUIRE(fs::exists("data-0.sstable"));
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+}
+
+TEST_CASE("Database truncates a torn WAL tail on recovery", "[engine][wal][recovery]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+
+    std::size_t valid_wal_size = 0;
+    {
+        Database<std::string, std::string> db{100};
+        REQUIRE(db.put("a", "1"));
+        REQUIRE(db.put("b", "2"));
+        valid_wal_size = fs::file_size("db.wal");
+    }
+
+    // Simulate a crash while appending a third record: only a partial key exists.
+    {
+        std::ofstream wal("db.wal", std::ios::binary | std::ios::app);
+        const ByteVec torn_bytes{std::byte{0x05}, std::byte{'c'}}; // key length 5, one byte
+        wal.write(reinterpret_cast<const char*>(torn_bytes.data()),
+                  static_cast<std::streamsize>(torn_bytes.size()));
+        wal.flush();
+    }
+    REQUIRE(fs::file_size("db.wal") > valid_wal_size);
+
+    {
+        Database<std::string, std::string> recovered{100};
+
+        auto a = recovered.get("a");
+        REQUIRE(a != nullptr);
+        REQUIRE(*a == "1");
+
+        // The torn bytes must have been truncated away during recovery.
+        REQUIRE(fs::file_size("db.wal") == valid_wal_size);
+
+        // A write after truncation must survive another restart; without the
+        // truncation it would be appended after the torn bytes and never replayed.
+        REQUIRE(recovered.put("c", "3"));
+    }
+
+    {
+        Database<std::string, std::string> reopened{100};
+        auto c = reopened.get("c");
+        REQUIRE(c != nullptr);
+        REQUIRE(*c == "3");
     }
 
     remove_if_exists("db.wal");

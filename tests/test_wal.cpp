@@ -230,25 +230,28 @@ TEST_CASE("Wal replay error handling", "[wal]") {
         REQUIRE(replay->memtable.get(to_bytes("anything")) == nullptr);
     }
 
-    SECTION("Truncated value payload returns NOT_ENOUGH_BYTES_LEFT") {
+    SECTION("Truncated value payload is treated as a torn tail") {
         // key length = 1, key = 'a', value length = 5, payload = "he" (truncated)
         write_raw_file(std::string{WAL_PATH},
                        ByteVec{std::byte{0x01}, std::byte{'a'}, std::byte{0x05}, std::byte{'h'},
                                std::byte{'e'}});
 
         auto replay = Wal::replay_wal(std::string{WAL_PATH});
-        REQUIRE_FALSE(replay.has_value());
-        REQUIRE(replay.error() == ErrorCode::NOT_ENOUGH_BYTES_LEFT);
+        REQUIRE(replay.has_value());
+        REQUIRE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 0);
+        REQUIRE(replay->memtable.get(to_bytes("a")) == nullptr);
     }
 
-    SECTION("Truncated varint returns UNEXPECTED_END") {
+    SECTION("Truncated varint is treated as a torn tail") {
         // key length = 1, key = 'a', then a varint with the continuation bit set and EOF
         write_raw_file(std::string{WAL_PATH},
                        ByteVec{std::byte{0x01}, std::byte{'a'}, std::byte{0x80}});
 
         auto replay = Wal::replay_wal(std::string{WAL_PATH});
-        REQUIRE_FALSE(replay.has_value());
-        REQUIRE(replay.error() == ErrorCode::UNEXPECTED_END);
+        REQUIRE(replay.has_value());
+        REQUIRE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 0);
     }
 
     SECTION("Varint value that overflows uint32_t returns OVERFLOW") {
@@ -269,6 +272,107 @@ TEST_CASE("Wal replay error handling", "[wal]") {
         auto replay = Wal::replay_wal(std::string{WAL_PATH});
         REQUIRE_FALSE(replay.has_value());
         REQUIRE(replay.error() == ErrorCode::TOO_MANY_BYTES);
+    }
+
+    remove_if_exists(WAL_PATH);
+}
+
+TEST_CASE("Wal replay tolerates a torn tail", "[wal]") {
+    remove_if_exists(WAL_PATH);
+
+    // key "a" -> "1" and key "b" -> "2" as encoded records
+    const ByteVec record_a{std::byte{0x01}, std::byte{'a'}, std::byte{0x01}, std::byte{'1'}};
+    const ByteVec record_b{std::byte{0x01}, std::byte{'b'}, std::byte{0x01}, std::byte{'2'}};
+
+    auto valid_prefix = [&] {
+        ByteVec bytes = record_a;
+        bytes.insert(bytes.end(), record_b.begin(), record_b.end());
+        return bytes;
+    };
+
+    SECTION("Clean file reports no torn tail") {
+        const ByteVec bytes = valid_prefix();
+        write_raw_file(std::string{WAL_PATH}, bytes);
+
+        auto replay = Wal::replay_wal(std::string{WAL_PATH});
+        REQUIRE(replay.has_value());
+        REQUIRE_FALSE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 2);
+        REQUIRE(replay->bytes_consumed == bytes.size());
+    }
+
+    SECTION("Torn varint at the tail keeps the complete records") {
+        ByteVec bytes = valid_prefix();
+        bytes.push_back(std::byte{0x80}); // continuation bit set, then EOF
+        write_raw_file(std::string{WAL_PATH}, bytes);
+
+        auto replay = Wal::replay_wal(std::string{WAL_PATH});
+        REQUIRE(replay.has_value());
+        REQUIRE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 2);
+        REQUIRE(replay->bytes_consumed == record_a.size() + record_b.size());
+
+        const ByteVec* a = replay->memtable.get(to_bytes("a"));
+        REQUIRE(a != nullptr);
+        REQUIRE(*a == to_bytes("1"));
+        const ByteVec* b = replay->memtable.get(to_bytes("b"));
+        REQUIRE(b != nullptr);
+        REQUIRE(*b == to_bytes("2"));
+    }
+
+    SECTION("Torn key payload at the tail keeps the complete records") {
+        ByteVec bytes = record_a;
+        bytes.push_back(std::byte{0x05}); // key length = 5...
+        bytes.push_back(std::byte{'x'});  // ...but only one key byte exists
+        write_raw_file(std::string{WAL_PATH}, bytes);
+
+        auto replay = Wal::replay_wal(std::string{WAL_PATH});
+        REQUIRE(replay.has_value());
+        REQUIRE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 1);
+        REQUIRE(replay->bytes_consumed == record_a.size());
+        REQUIRE(replay->memtable.get(to_bytes("x")) == nullptr);
+    }
+
+    SECTION("Record cut after the key keeps the complete records") {
+        ByteVec bytes = record_a;
+        bytes.push_back(std::byte{0x01}); // key length = 1
+        bytes.push_back(std::byte{'z'});  // key "z", then EOF (no value length)
+        write_raw_file(std::string{WAL_PATH}, bytes);
+
+        auto replay = Wal::replay_wal(std::string{WAL_PATH});
+        REQUIRE(replay.has_value());
+        REQUIRE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 1);
+        REQUIRE(replay->bytes_consumed == record_a.size());
+        REQUIRE(replay->memtable.get(to_bytes("z")) == nullptr);
+    }
+
+    SECTION("Torn value payload at the tail keeps the complete records") {
+        ByteVec bytes = record_a;
+        bytes.push_back(std::byte{0x01}); // key length = 1
+        bytes.push_back(std::byte{'z'});  // key "z"
+        bytes.push_back(std::byte{0x03}); // value length = 3...
+        bytes.push_back(std::byte{'v'});  // ...but only one value byte exists
+        write_raw_file(std::string{WAL_PATH}, bytes);
+
+        auto replay = Wal::replay_wal(std::string{WAL_PATH});
+        REQUIRE(replay.has_value());
+        REQUIRE(replay->had_torn_tail);
+        REQUIRE(replay->record_count == 1);
+        REQUIRE(replay->bytes_consumed == record_a.size());
+        REQUIRE(replay->memtable.get(to_bytes("z")) == nullptr);
+    }
+
+    SECTION("Corrupted varint after valid records is an error") {
+        ByteVec bytes = record_a;
+        bytes.insert(bytes.end(), {std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF},
+                                   std::byte{0xFF}, std::byte{0x7F}});
+        write_raw_file(std::string{WAL_PATH}, bytes);
+
+        auto replay = Wal::replay_wal(std::string{WAL_PATH});
+        REQUIRE_FALSE(replay.has_value());
+        REQUIRE(replay.error() == ErrorCode::OVERFLOW);
     }
 
     remove_if_exists(WAL_PATH);

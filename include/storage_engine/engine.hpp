@@ -42,7 +42,7 @@ class Database {
     size_t sstable_counter_{0};
 
     void clear_memtable() noexcept { db_.clear_memtable(); }
-    void clear_wal() noexcept { wal_.clear(wal_path_); }
+    void clear_wal() noexcept { wal_.clear(); }
 
 public:
     Database(size_t max_memtable_size) : wal_(wal_path_), max_memtable_size_(max_memtable_size) {
@@ -52,6 +52,11 @@ public:
             // update memtable size counter and memtable itself
             memtable_size_ = wal_replay->record_count;
             db_.restore(std::move(wal_replay->memtable));
+
+            if (wal_replay->had_torn_tail) {
+                wal_.truncate_to(wal_replay->bytes_consumed);
+                std::println(stderr, "WAL: Torn tail truncated");
+            }
         } else {
             std::println(stderr, "{}", to_string(wal_replay.error()));
         }
