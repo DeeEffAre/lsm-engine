@@ -7,6 +7,7 @@
 #include "storage_engine/wal.hpp"
 
 #include <expected>
+#include <filesystem>
 #include <ranges>
 
 class Engine {
@@ -46,8 +47,10 @@ class Database {
 
 public:
     Database(size_t max_memtable_size) : wal_(wal_path_), max_memtable_size_(max_memtable_size) {
-        auto wal_replay = Wal::replay_wal(wal_path_);
+        namespace fs = std::filesystem;
 
+        // load wal
+        auto wal_replay = Wal::replay_wal(wal_path_);
         if (wal_replay.has_value()) {
             // update memtable size counter and memtable itself
             memtable_size_ = wal_replay->record_count;
@@ -59,6 +62,23 @@ public:
             }
         } else {
             std::println(stderr, "{}", to_string(wal_replay.error()));
+        }
+
+        // load sstables
+        for (size_t index : std::views::iota(0U)) {
+            // WARN: initialize that array so that fs::path constructor can determine where the
+            // C-string ends
+            std::array<char, 64> buffer{};
+
+            std::format_to_n(buffer.data(), buffer.size(), "data-{}.sstable", index);
+            fs::path current_file{buffer.data()};
+
+            if (!fs::exists(current_file)) {
+                break;
+            }
+
+            sstables_.emplace_back(std::move(current_file));
+            sstable_counter_++;
         }
     }
 

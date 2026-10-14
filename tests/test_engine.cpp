@@ -299,3 +299,129 @@ TEST_CASE("Database truncates a torn WAL tail on recovery", "[engine][wal][recov
     remove_if_exists("db.wal");
     remove_if_exists("data-0.sstable");
 }
+
+TEST_CASE("Flushed data survives a restart", "[engine][recovery]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+
+    {
+        Database<std::string, std::string> db{2};
+        REQUIRE(db.put("a", "1"));
+        REQUIRE(db.put("b", "2")); // reaches the threshold -> flush to data-0.sstable
+        REQUIRE(fs::exists("data-0.sstable"));
+    }
+
+    {
+        Database<std::string, std::string> reopened{100};
+
+        auto a = reopened.get("a");
+        auto b = reopened.get("b");
+        REQUIRE(a != nullptr);
+        REQUIRE(*a == "1");
+        REQUIRE(b != nullptr);
+        REQUIRE(*b == "2");
+        REQUIRE(reopened.get("missing") == nullptr);
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+}
+
+TEST_CASE("SSTable counter is recovered across restarts", "[engine][recovery][flush]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+
+    {
+        Database<std::string, std::string> db{1};
+        REQUIRE(db.put("a", "1")); // flush -> data-0.sstable
+        REQUIRE(fs::exists("data-0.sstable"));
+    }
+
+    {
+        Database<std::string, std::string> db{1};
+        REQUIRE(db.put("b", "2")); // must land in data-1.sstable
+        REQUIRE(fs::exists("data-1.sstable"));
+    }
+
+    // data-0 must not have been overwritten by the second flush
+    const SSTable first("data-0.sstable");
+    REQUIRE(first.get(serialized_key<std::string>("a")).has_value());
+    REQUIRE_FALSE(first.get(serialized_key<std::string>("b")).has_value());
+
+    const SSTable second("data-1.sstable");
+    REQUIRE(second.get(serialized_key<std::string>("b")).has_value());
+    REQUIRE_FALSE(second.get(serialized_key<std::string>("a")).has_value());
+
+    {
+        Database<std::string, std::string> reopened{100};
+        auto a = reopened.get("a");
+        auto b = reopened.get("b");
+        REQUIRE(a != nullptr);
+        REQUIRE(*a == "1");
+        REQUIRE(b != nullptr);
+        REQUIRE(*b == "2");
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+}
+
+TEST_CASE("Latest value wins across recovered sstables", "[engine][recovery]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+
+    {
+        Database<std::string, std::string> db{1};
+        REQUIRE(db.put("key", "old")); // data-0.sstable
+        REQUIRE(db.put("key", "new")); // data-1.sstable
+    }
+
+    {
+        Database<std::string, std::string> reopened{100};
+
+        auto value = reopened.get("key");
+        REQUIRE(value != nullptr);
+        REQUIRE(*value == "new");
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+}
+
+TEST_CASE("WAL and sstables recover together", "[engine][recovery][wal]") {
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+
+    {
+        Database<std::string, std::string> db{2};
+        REQUIRE(db.put("a", "1"));
+        REQUIRE(db.put("b", "2")); // flush -> data-0.sstable, WAL cleared
+        REQUIRE(fs::exists("data-0.sstable"));
+        REQUIRE(db.put("c", "3")); // stays in the WAL
+    }
+
+    {
+        Database<std::string, std::string> reopened{100};
+
+        auto a = reopened.get("a"); // from data-0.sstable
+        auto b = reopened.get("b"); // from data-0.sstable
+        auto c = reopened.get("c"); // from the replayed WAL
+        REQUIRE(a != nullptr);
+        REQUIRE(*a == "1");
+        REQUIRE(b != nullptr);
+        REQUIRE(*b == "2");
+        REQUIRE(c != nullptr);
+        REQUIRE(*c == "3");
+    }
+
+    remove_if_exists("db.wal");
+    remove_if_exists("data-0.sstable");
+    remove_if_exists("data-1.sstable");
+}
