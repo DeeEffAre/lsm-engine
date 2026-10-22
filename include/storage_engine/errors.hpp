@@ -13,6 +13,7 @@ enum class ErrorCode : uint8_t {
     BUFFER_TOO_SMALL,      // decode: declared length exceeds the buffer size
     LENGTH_MISMATCH,       // trivially copyable type size does not match the encoded length
     NOT_ENOUGH_BYTES_LEFT, // reader was asked for more bytes than are left
+    KEY_DELETED,           // key has been tombstoned
 };
 
 constexpr std::string_view to_string(ErrorCode code) noexcept {
@@ -35,6 +36,8 @@ constexpr std::string_view to_string(ErrorCode code) noexcept {
         return "length mismatch";
     case ErrorCode::NOT_ENOUGH_BYTES_LEFT:
         return "not enough bytes left";
+    case ErrorCode::KEY_DELETED:
+        return "this key has been deleted";
     }
     return "unknown";
 }

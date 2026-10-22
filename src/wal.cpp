@@ -3,10 +3,10 @@
 #include "storage_engine/errors.hpp"
 #include "storage_engine/length_encoding.hpp"
 
-std::expected<WalReplayResult, ErrorCode> Wal::replay_wal(const std::string& path) noexcept {
+auto Wal::replay_wal() const noexcept -> std::expected<WalReplayResult, ErrorCode> {
     WalReplayResult result{};
 
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(path_, std::ios::binary);
     if (!file.is_open()) [[unlikely]] {
         return std::unexpected(ErrorCode::FILE_ERROR);
     }
@@ -14,9 +14,20 @@ std::expected<WalReplayResult, ErrorCode> Wal::replay_wal(const std::string& pat
     StreamReader reader{file};
 
     while (true) {
+        const auto record_type_optional = reader.read_record_type();
+
+        // EOF
+        if (!record_type_optional.has_value()) {
+            break;
+        }
+        const auto record_type = *record_type_optional;
+
         auto key_length = reader.read_varint();
         if (!key_length) [[unlikely]] {
+            // because there is record type before key section now, 0 size key length after a record
+            // type should be considered as torn-tail
             if (key_length.error() == ErrorCode::END_OF_STREAM) {
+                result.had_torn_tail = true;
                 break;
             }
 
@@ -37,6 +48,14 @@ std::expected<WalReplayResult, ErrorCode> Wal::replay_wal(const std::string& pat
             }
 
             return std::unexpected(stored_key.error());
+        }
+
+        // there is no value section so skip over
+        if (record_type == RecordType::DELETE) {
+            result.memtable.put(record_type, std::move(*stored_key), {});
+            result.record_count++;
+            result.bytes_consumed = static_cast<size_t>(file.tellg());
+            continue;
         }
 
         auto value_length = reader.read_varint();
@@ -65,7 +84,7 @@ std::expected<WalReplayResult, ErrorCode> Wal::replay_wal(const std::string& pat
             return std::unexpected(stored_value.error());
         }
 
-        result.memtable.put(std::move(*stored_key), std::move(*stored_value));
+        result.memtable.put(record_type, std::move(*stored_key), std::move(*stored_value));
         result.record_count++;
 
         // record last healthy position

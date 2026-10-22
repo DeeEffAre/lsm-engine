@@ -8,6 +8,7 @@
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <system_error>
 
 struct WalReplayResult {
@@ -29,7 +30,7 @@ public:
         }
     }
 
-    bool write(const ByteVec& key, const ByteVec& value) noexcept {
+    bool write_put(const ByteVec& key, const ByteVec& value) noexcept {
         auto encoded_key = encode<ByteVec>(key);
         if (!encoded_key.has_value()) {
             return false;
@@ -40,6 +41,9 @@ public:
             return false;
         }
 
+        auto record_type = RecordType::PUT;
+        file_.write(reinterpret_cast<const char*>(&record_type),
+                    static_cast<std::streamsize>(sizeof(RecordType)));
         file_.write(reinterpret_cast<const char*>(encoded_key->data()),
                     static_cast<std::streamsize>(encoded_key->size()));
         file_.write(reinterpret_cast<const char*>(encoded_value->data()),
@@ -49,7 +53,25 @@ public:
         return static_cast<bool>(file_);
     }
 
-    static std::expected<WalReplayResult, ErrorCode> replay_wal(const std::string& path) noexcept;
+    bool write_delete(const ByteVec& key) noexcept {
+        auto encoded_key = encode<ByteVec>(key);
+        if (!encoded_key.has_value()) {
+            return false;
+        }
+
+        // do not write a value section
+        auto record_type = RecordType::DELETE;
+        file_.write(reinterpret_cast<const char*>(&record_type),
+                    static_cast<std::streamsize>(sizeof(RecordType)));
+        file_.write(reinterpret_cast<const char*>(encoded_key->data()),
+                    static_cast<std::streamsize>(encoded_key->size()));
+        file_.flush();
+
+        return static_cast<bool>(file_);
+    }
+
+    // loads wal records to memtable
+    auto replay_wal() const noexcept -> std::expected<WalReplayResult, ErrorCode>;
 
     void truncate_to(size_t truncate_from) noexcept {
         file_.close();

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <expected>
+#include <optional>
 
 std::expected<uint32_t, ErrorCode> ByteReader::read_varint() {
     if (at_end()) {
@@ -28,6 +29,16 @@ std::expected<ByteSpan, ErrorCode> ByteReader::read_bytes(size_t payload_length)
     pos_ += payload_length;
 
     return result;
+}
+
+std::optional<RecordType> StreamReader::read_record_type() {
+    char record_type_raw{};
+    // EOF
+    if (!file_.get(record_type_raw)) {
+        return std::nullopt;
+    }
+
+    return static_cast<RecordType>(record_type_raw);
 }
 
 std::expected<uint32_t, ErrorCode> StreamReader::read_varint() {

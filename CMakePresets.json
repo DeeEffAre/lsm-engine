@@ -18,7 +18,8 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VCPKG_MANIFEST_MODE": "ON",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
-        "MYPROJECT_ENABLE_CCACHE": "ON"
+        "MYPROJECT_ENABLE_CCACHE": "ON",
+        "CMAKE_COLOR_DIAGNOSTICS": "ON"
       }
     },
     {
@@ -73,7 +74,7 @@
       "cacheVariables": {
         "MYPROJECT_ENABLE_SANITIZERS": "ON",
         "MYPROJECT_SANITIZERS": "address,undefined",
-		"MYPROJECT_BUILD_BENCHMARKS": "OFF"
+        "MYPROJECT_BUILD_BENCHMARKS": "OFF"
       }
     },
     {
@@ -83,7 +84,7 @@
       "cacheVariables": {
         "MYPROJECT_ENABLE_SANITIZERS": "ON",
         "MYPROJECT_SANITIZERS": "thread",
-		"MYPROJECT_BUILD_BENCHMARKS": "OFF"
+        "MYPROJECT_BUILD_BENCHMARKS": "OFF"
       }
     },
     {
@@ -92,7 +93,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "MYPROJECT_ENABLE_COVERAGE": "ON",
-		"MYPROJECT_BUILD_BENCHMARKS": "OFF"
+        "MYPROJECT_BUILD_BENCHMARKS": "OFF"
       }
     },
     {

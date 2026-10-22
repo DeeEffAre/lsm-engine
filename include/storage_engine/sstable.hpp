@@ -15,5 +15,5 @@ public:
     SSTable(const std::filesystem::path& entry) : path_(entry) {}
 
     [[nodiscard]]
-    std::expected<ByteVec, ErrorCode> get(ByteSpan key) const noexcept;
+    auto get(ByteSpan key) const noexcept -> std::expected<ByteVec, ErrorCode>;
 };

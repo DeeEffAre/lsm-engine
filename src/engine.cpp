@@ -5,16 +5,17 @@
 #include <expected>
 #include <fstream>
 
-void Engine::put(ByteVec key, ByteVec value) noexcept {
-    memtable_.put(std::move(key), std::move(value));
+void Engine::put(RecordType record_type, ByteVec key, ByteVec value) noexcept {
+    memtable_.put(record_type, std::move(key), std::move(value));
 }
 
-const ByteVec* Engine::get(ByteSpan key) const noexcept {
+auto Engine::get(ByteSpan key) const noexcept -> std::expected<const ByteVec*, ErrorCode> {
     return memtable_.get(key);
 }
 
-ByteVec* Engine::get(ByteSpan key) noexcept {
-    return const_cast<ByteVec*>(std::as_const(memtable_).get(key)); // NOLINT
+auto Engine::get(ByteSpan key) noexcept -> std::expected<ByteVec*, ErrorCode> {
+    return std::as_const(memtable_).get(key).transform(
+        [](auto inner) { return const_cast<ByteVec*>(inner); }); // NOLINT
 }
 
 std::expected<SSTable, ErrorCode> Engine::write_sstable(const char* path) const noexcept {

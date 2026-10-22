@@ -1,9 +1,12 @@
 #include "storage_engine/memtable.hpp"
 
+#include "storage_engine/errors.hpp"
 #include "storage_engine/serialize_deserialize.hpp"
 #include "storage_engine/types.hpp"
 
 #include <algorithm>
+#include <expected>
+#include <ios>
 #include <random>
 
 namespace {
@@ -28,13 +31,14 @@ struct ByteCompare {
 class MemtableSkipList {
 private:
     struct Node {
+        RecordType record_type_;    // NOLINT
         ByteVec key;                // NOLINT
         ByteVec value;              // NOLINT
         std::vector<Node*> forward; // NOLINT
 
-        Node(ByteVec k, ByteVec v, int level)
-            : key(std::move(k)), value(std::move(v)), forward(static_cast<size_t>(level), nullptr) {
-        }
+        Node(RecordType record_type, ByteVec k, ByteVec v, int level)
+            : record_type_(record_type), key(std::move(k)), value(std::move(v)),
+              forward(static_cast<size_t>(level), nullptr) {}
     };
 
     static constexpr int MAX_LEVEL = 16;
@@ -66,7 +70,9 @@ private:
     }
 
 public:
-    MemtableSkipList() : level_(1), compare_() { head_ = new Node({}, {}, MAX_LEVEL); } // NOLINT
+    MemtableSkipList() : level_(1), compare_() {
+        head_ = new Node(RecordType::PUT, {}, {}, MAX_LEVEL); // NOLINT
+    }
     MemtableSkipList(const MemtableSkipList&) = default;
     MemtableSkipList(MemtableSkipList&&) = delete;
     MemtableSkipList& operator=(const MemtableSkipList&) = default;
@@ -78,7 +84,7 @@ public:
 
     void clear() noexcept { clear_nodes(); }
 
-    void insert_or_assign(ByteVec key, ByteVec value) {
+    void insert_or_assign(RecordType record_type, ByteVec key, ByteVec value) {
         std::vector<Node*> update(MAX_LEVEL, nullptr);
         Node* current = head_;
 
@@ -94,6 +100,7 @@ public:
 
         // if key exists, assign the new value
         if (current != nullptr && !compare_(current->key, key) && !compare_(key, current->key)) {
+            current->record_type_ = record_type;
             current->value = std::move(value);
             return;
         }
@@ -106,7 +113,13 @@ public:
             level_ = new_level;
         }
 
-        Node* new_node = new Node(std::move(key), std::move(value), new_level);
+        // do not add value section when a record is delete
+        Node* new_node; // NOLINT
+        if (record_type == RecordType::DELETE) {
+            new_node = new Node(record_type, std::move(key), {}, new_level); // NOLINT
+        } else {
+            new_node = new Node(record_type, std::move(key), std::move(value), new_level); // NOLINT
+        }
         for (int i = 0; i < new_level; ++i) {
             new_node->forward[static_cast<size_t>(i)] =
                 update[static_cast<size_t>(i)]->forward[static_cast<size_t>(i)];
@@ -117,7 +130,7 @@ public:
     // supports both ByteVec and ByteSpan as argument
     template <typename K>
     [[nodiscard]]
-    const ByteVec* find(const K& key) const noexcept {
+    std::expected<const ByteVec*, ErrorCode> find(const K& key) const noexcept {
         Node* current = head_;
         for (int i = level_ - 1; i >= 0; --i) {
             while (current->forward[static_cast<size_t>(i)] != nullptr &&
@@ -127,10 +140,15 @@ public:
         }
         current = current->forward[0];
 
-        if (current != nullptr && !compare_(current->key, key) && !compare_(key, current->key)) {
-            return &(current->value);
+        if (current == nullptr || compare_(current->key, key) || compare_(key, current->key)) {
+            return std::unexpected(ErrorCode::NOT_FOUND);
         }
-        return nullptr;
+
+        if (current->record_type_ == RecordType::DELETE) {
+            return std::unexpected(ErrorCode::KEY_DELETED);
+        }
+
+        return &(current->value);
     }
 
     // access to level-0
@@ -157,30 +175,44 @@ Memtable::~Memtable() = default;
 Memtable::Memtable(Memtable&&) noexcept = default;
 Memtable& Memtable::operator=(Memtable&&) noexcept = default;
 
-void Memtable::put(ByteVec key, ByteVec value) noexcept {
-    pimpl_->data_.insert_or_assign(std::move(key), std::move(value));
+void Memtable::put(RecordType record_type, ByteVec key, ByteVec value) noexcept {
+    pimpl_->data_.insert_or_assign(record_type, std::move(key), std::move(value));
 }
 
-const ByteVec* Memtable::get(ByteSpan key) const noexcept {
+auto Memtable::get(ByteSpan key) const noexcept -> std::expected<const ByteVec*, ErrorCode> {
     return pimpl_->data_.find(key);
 }
 
-ByteVec* Memtable::get(ByteSpan key) noexcept {
-    return const_cast<ByteVec*>(std::as_const(*this).get(key)); // NOLINT
+auto Memtable::get(ByteSpan key) noexcept -> std::expected<ByteVec*, ErrorCode> {
+    return std::as_const(*this).get(key).transform(
+        [](auto inner) { return const_cast<ByteVec*>(inner); });
 }
 
 bool Memtable::write_to(std::ostream& stream) const noexcept {
     for (auto* node = pimpl_->data_.begin(); node != nullptr; node = node->forward[0]) {
+        auto record_type = node->record_type_;
         auto encoded_key = encode<ByteVec>(node->key);
         auto encoded_value = encode<ByteVec>(node->value);
         if (!encoded_key.has_value() || !encoded_value.has_value()) {
             return false;
         }
 
-        stream.write(reinterpret_cast<const char*>(encoded_key->data()),
-                     static_cast<std::streamsize>(encoded_key->size()));
-        stream.write(reinterpret_cast<const char*>(encoded_value->data()),
-                     static_cast<std::streamsize>(encoded_value->size()));
+        // don't add the value section if it is a DELETE record
+        if (record_type == RecordType::DELETE) {
+            stream.write(reinterpret_cast<const char*>(&record_type),
+                         static_cast<std::streamsize>(sizeof(record_type)));
+            stream.write(reinterpret_cast<const char*>(encoded_key->data()),
+                         static_cast<std::streamsize>(encoded_key->size()));
+        }
+
+        if (record_type == RecordType::PUT) {
+            stream.write(reinterpret_cast<const char*>(&record_type),
+                         static_cast<std::streamsize>(sizeof(record_type)));
+            stream.write(reinterpret_cast<const char*>(encoded_key->data()),
+                         static_cast<std::streamsize>(encoded_key->size()));
+            stream.write(reinterpret_cast<const char*>(encoded_value->data()),
+                         static_cast<std::streamsize>(encoded_value->size()));
+        }
     }
 
     return static_cast<bool>(stream);

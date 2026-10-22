@@ -1,6 +1,9 @@
 #pragma once
 
+#include "storage_engine/errors.hpp"
 #include "types.hpp"
+
+#include <expected>
 
 class Memtable {
     struct Impl; // Forward declaration
@@ -14,12 +17,13 @@ public:
     Memtable(Memtable&&) noexcept;
     Memtable& operator=(Memtable&&) noexcept;
 
-    void put(ByteVec key, ByteVec value) noexcept;
+    // supports both PUT and DELETE operations
+    void put(RecordType record_type, ByteVec key, ByteVec value) noexcept;
 
     [[nodiscard]]
-    const ByteVec* get(ByteSpan key) const noexcept;
+    auto get(ByteSpan key) const noexcept -> std::expected<const ByteVec*, ErrorCode>;
 
-    ByteVec* get(ByteSpan key) noexcept;
+    auto get(ByteSpan key) noexcept -> std::expected<ByteVec*, ErrorCode>;
 
     bool write_to(std::ostream& stream) const noexcept;
 

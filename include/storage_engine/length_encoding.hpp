@@ -42,6 +42,8 @@ class StreamReader {
 
 public:
     StreamReader(std::istream& file_stream) : file_(file_stream) {}
+    // `std::nullopt` on EOF
+    std::optional<RecordType> read_record_type();
     // reads leb128/varint encoded length prefix
     std::expected<uint32_t, ErrorCode> read_varint();
     // reads the binary encoded value

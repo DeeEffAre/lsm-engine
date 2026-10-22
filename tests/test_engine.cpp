@@ -16,6 +16,31 @@ void remove_if_exists(const std::string& path) {
     }
 }
 
+void remove_database_artifacts() {
+    remove_if_exists("db.wal");
+
+    std::vector<fs::path> sstables;
+    for (const auto& entry : fs::directory_iterator(".")) {
+        const std::string name = entry.path().filename().string();
+        if (name.starts_with("data-") && name.ends_with(".sstable")) {
+            sstables.push_back(entry.path());
+        }
+    }
+
+    for (const auto& path : sstables) {
+        fs::remove(path);
+    }
+}
+
+// Removes artifacts both before and after a test, even when an assertion fails.
+struct DatabaseArtifactsGuard {
+    DatabaseArtifactsGuard() { remove_database_artifacts(); }
+    ~DatabaseArtifactsGuard() { remove_database_artifacts(); }
+
+    DatabaseArtifactsGuard(const DatabaseArtifactsGuard&) = delete;
+    DatabaseArtifactsGuard& operator=(const DatabaseArtifactsGuard&) = delete;
+};
+
 template <typename T>
 ByteVec serialized_key(const T& value) {
     auto encoded = serialize_value(value);
@@ -33,15 +58,22 @@ TEST_CASE("Engine integrates memtable and sstable", "[engine]") {
     REQUIRE(value_serialized.has_value());
 
     Engine engine;
-    engine.put(serialized_key<std::string>("key"), *value_serialized);
+    engine.put(RecordType::PUT, serialized_key<std::string>("key"), *value_serialized);
 
     const Engine& const_engine = engine;
-    const ByteVec* value = const_engine.get(serialized_key<std::string>("key"));
-    REQUIRE(value != nullptr);
-    const auto decoded = deserialize_value<std::string>(*value, static_cast<uint32_t>(value->size()));
+    auto value_expected = const_engine.get(serialized_key<std::string>("key"));
+    REQUIRE(value_expected.has_value());
+    REQUIRE(*value_expected != nullptr);
+
+    const ByteVec* value = *value_expected;
+    const auto decoded =
+        deserialize_value<std::string>(*value, static_cast<uint32_t>(value->size()));
     REQUIRE(decoded.has_value());
     REQUIRE(*decoded == "value");
-    REQUIRE(const_engine.get(serialized_key<std::string>("missing")) == nullptr);
+
+    auto missing = const_engine.get(serialized_key<std::string>("missing"));
+    REQUIRE_FALSE(missing.has_value());
+    REQUIRE(missing.error() == ErrorCode::NOT_FOUND);
 
     auto table = engine.write_sstable(path.c_str());
     REQUIRE(table.has_value());
@@ -121,13 +153,20 @@ TEST_CASE("Database flush behavior", "[engine][flush]") {
         db.put("a", "1");
 
         // Before the flush the value only lives in the memtable.
-        REQUIRE(db.get_db().get(serialized_key<std::string>("a")) != nullptr);
+        auto before_flush = db.get_db().get(serialized_key<std::string>("a"));
+        REQUIRE(before_flush.has_value());
+        REQUIRE(*before_flush != nullptr);
 
         db.put("b", "2");
 
         // After the flush the memtable must be empty...
-        REQUIRE(db.get_db().get(serialized_key<std::string>("a")) == nullptr);
-        REQUIRE(db.get_db().get(serialized_key<std::string>("b")) == nullptr);
+        auto after_a = db.get_db().get(serialized_key<std::string>("a"));
+        REQUIRE_FALSE(after_a.has_value());
+        REQUIRE(after_a.error() == ErrorCode::NOT_FOUND);
+
+        auto after_b = db.get_db().get(serialized_key<std::string>("b"));
+        REQUIRE_FALSE(after_b.has_value());
+        REQUIRE(after_b.error() == ErrorCode::NOT_FOUND);
 
         // ...but the values must still be reachable through the sstable.
         auto a = db.get("a");
@@ -392,6 +431,141 @@ TEST_CASE("Latest value wins across recovered sstables", "[engine][recovery]") {
     remove_if_exists("db.wal");
     remove_if_exists("data-0.sstable");
     remove_if_exists("data-1.sstable");
+}
+
+TEST_CASE("Database tombstones hide older values", "[engine][tombstone]") {
+    DatabaseArtifactsGuard guard;
+
+    SECTION("Delete hides a value in the memtable") {
+        Database<std::string, std::string> db{100};
+        REQUIRE(db.put("key", "value"));
+        REQUIRE(db.delete_record("key"));
+        REQUIRE(db.get("key") == nullptr);
+    }
+
+    SECTION("Deleting a missing key succeeds and stays missing") {
+        Database<std::string, std::string> db{100};
+        REQUIRE(db.delete_record("missing"));
+        REQUIRE(db.get("missing") == nullptr);
+    }
+
+    SECTION("Delete hides a value from an older sstable") {
+        Database<std::string, std::string> db{1};
+        REQUIRE(db.put("key", "old")); // flush -> data-0.sstable
+        REQUIRE(fs::exists("data-0.sstable"));
+
+        REQUIRE(db.delete_record("key"));
+        REQUIRE(db.get("key") == nullptr);
+    }
+
+    SECTION("A PUT after a DELETE resurrects the key") {
+        Database<std::string, std::string> db{100};
+        REQUIRE(db.put("key", "old"));
+        REQUIRE(db.delete_record("key"));
+        REQUIRE(db.get("key") == nullptr);
+
+        REQUIRE(db.put("key", "new"));
+        auto value = db.get("key");
+        REQUIRE(value != nullptr);
+        REQUIRE(*value == "new");
+    }
+
+    SECTION("handle dispatches PUT and DELETE") {
+        Database<std::string, std::string> db{100};
+        REQUIRE(db.handle(RecordType::PUT, std::string{"key"}, std::string{"value"}));
+
+        auto value = db.get("key");
+        REQUIRE(value != nullptr);
+        REQUIRE(*value == "value");
+
+        REQUIRE(db.handle(RecordType::DELETE, std::string{"key"}, std::string{}));
+        REQUIRE(db.get("key") == nullptr);
+    }
+}
+
+TEST_CASE("Database tombstones count as memtable writes", "[engine][tombstone][flush]") {
+    DatabaseArtifactsGuard guard;
+
+    SECTION("A delete alone can trigger a flush") {
+        Database<std::string, std::string> db{1};
+        REQUIRE(db.delete_record("missing"));
+
+        REQUIRE(fs::exists("data-0.sstable"));
+        REQUIRE(db.get("missing") == nullptr);
+
+        const SSTable table("data-0.sstable");
+        auto deleted = table.get(serialized_key<std::string>("missing"));
+        REQUIRE_FALSE(deleted.has_value());
+        REQUIRE(deleted.error() == ErrorCode::KEY_DELETED);
+    }
+
+    SECTION("A delete after a put reaches the threshold") {
+        Database<std::string, std::string> db{2};
+        REQUIRE(db.put("a", "1"));
+        REQUIRE_FALSE(fs::exists("data-0.sstable"));
+
+        REQUIRE(db.delete_record("b"));
+        REQUIRE(fs::exists("data-0.sstable"));
+
+        auto a = db.get("a");
+        REQUIRE(a != nullptr);
+        REQUIRE(*a == "1");
+        REQUIRE(db.get("b") == nullptr);
+    }
+}
+
+TEST_CASE("Database tombstones survive recovery", "[engine][tombstone][recovery]") {
+    DatabaseArtifactsGuard guard;
+
+    SECTION("A tombstone replayed from the WAL hides an older sstable value") {
+        {
+            Database<std::string, std::string> db{1};
+            REQUIRE(db.put("key", "old")); // flush -> data-0.sstable, WAL cleared
+            REQUIRE(fs::exists("data-0.sstable"));
+        }
+
+        {
+            Database<std::string, std::string> db{100};
+            REQUIRE(db.delete_record("key")); // stays in the WAL
+            REQUIRE(db.get("key") == nullptr);
+        }
+
+        {
+            Database<std::string, std::string> reopened{100};
+            REQUIRE(reopened.get("key") == nullptr);
+        }
+    }
+
+    SECTION("A flushed tombstone survives a restart") {
+        {
+            Database<std::string, std::string> db{1};
+            REQUIRE(db.put("key", "old"));    // flush -> data-0.sstable
+            REQUIRE(db.delete_record("key")); // must flush -> data-1.sstable
+        }
+
+        REQUIRE(fs::exists("data-1.sstable"));
+        const SSTable tombstone("data-1.sstable");
+        auto deleted = tombstone.get(serialized_key<std::string>("key"));
+        REQUIRE_FALSE(deleted.has_value());
+        REQUIRE(deleted.error() == ErrorCode::KEY_DELETED);
+
+        Database<std::string, std::string> reopened{100};
+        REQUIRE(reopened.get("key") == nullptr);
+    }
+
+    SECTION("A key can be revived after a delete was flushed") {
+        {
+            Database<std::string, std::string> db{1};
+            REQUIRE(db.put("key", "old"));    // data-0.sstable
+            REQUIRE(db.delete_record("key")); // data-1.sstable
+            REQUIRE(db.put("key", "new"));    // data-2.sstable
+        }
+
+        Database<std::string, std::string> reopened{100};
+        auto value = reopened.get("key");
+        REQUIRE(value != nullptr);
+        REQUIRE(*value == "new");
+    }
 }
 
 TEST_CASE("WAL and sstables recover together", "[engine][recovery][wal]") {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "storage_engine/errors.hpp"
 #include "storage_engine/memtable.hpp"
 #include "storage_engine/serialize_deserialize.hpp"
 #include "storage_engine/sstable.hpp"
@@ -14,14 +15,12 @@ class Engine {
     Memtable memtable_;
 
 public:
-    void put(ByteVec key, ByteVec value) noexcept;
+    void put(RecordType record_type, ByteVec key, ByteVec value) noexcept;
 
-    // returns `nullptr` on error
     [[nodiscard]]
-    const ByteVec* get(ByteSpan key) const noexcept;
+    auto get(ByteSpan key) const noexcept -> std::expected<const ByteVec*, ErrorCode>;
 
-    // returns `nullptr` on error
-    ByteVec* get(ByteSpan key) noexcept;
+    auto get(ByteSpan key) noexcept -> std::expected<ByteVec*, ErrorCode>;
 
     [[nodiscard]]
     std::expected<SSTable, ErrorCode> write_sstable(const char* path) const noexcept;
@@ -50,7 +49,7 @@ public:
         namespace fs = std::filesystem;
 
         // load wal
-        auto wal_replay = Wal::replay_wal(wal_path_);
+        auto wal_replay = wal_.replay_wal();
         if (wal_replay.has_value()) {
             // update memtable size counter and memtable itself
             memtable_size_ = wal_replay->record_count;
@@ -82,6 +81,19 @@ public:
         }
     }
 
+    // TODO: maybe std::expected for explicitness
+
+    constexpr bool handle(RecordType record_type, const K& key, const V& value) {
+        switch (record_type) {
+        case RecordType::PUT:
+            return put(key, value);
+        case RecordType::DELETE:
+            return delete_record(key);
+        default:
+            [[unlikely]] return false;
+        }
+    }
+
     bool put(const K& key, const V& value) noexcept {
         auto value_serialized = serialize_value<V>(value);
         if (!value_serialized.has_value()) {
@@ -93,11 +105,11 @@ public:
             return false;
         }
 
-        if (!wal_.write(*key_serialized, *value_serialized)) {
+        if (!wal_.write_put(*key_serialized, *value_serialized)) {
             return false;
         };
 
-        db_.put(std::move(*key_serialized), std::move(*value_serialized));
+        db_.put(RecordType::PUT, std::move(*key_serialized), std::move(*value_serialized));
         memtable_size_++;
 
         if (memtable_size_ >= max_memtable_size_) {
@@ -106,6 +118,28 @@ public:
 
         return true;
     }
+
+    bool delete_record(const K& key) noexcept {
+        auto key_serialized = serialize_value(key);
+        if (!key_serialized.has_value()) {
+            return false;
+        }
+
+        if (!wal_.write_delete(*key_serialized)) {
+            return false;
+        }
+
+        db_.put(RecordType::DELETE, std::move(*key_serialized), {});
+        memtable_size_++;
+
+        if (memtable_size_ >= max_memtable_size_) {
+            return flush_memtable();
+        }
+
+        return true;
+    }
+
+    // TODO: again maybe wrap with std::expected for explicitness
 
     // returns `nullptr` on error
     [[nodiscard]]
@@ -124,8 +158,15 @@ public:
             return std::make_unique<V>(std::move(*decoded));
         };
 
-        const ByteVec* value_from_db = std::as_const(db_).get(probe);
-        if (value_from_db != nullptr) {
+        auto value_from_db_expected = std::as_const(db_).get(probe);
+        if (!value_from_db_expected.has_value()) {
+            if (value_from_db_expected.error() == ErrorCode::KEY_DELETED) {
+                return nullptr;
+            }
+
+            // if ErrorCode::NOT_FOUND arrives, do nothing and search sstable
+        } else {
+            const auto* value_from_db = *value_from_db_expected;
             return decode_value(*value_from_db);
         }
 
@@ -133,6 +174,10 @@ public:
             auto result = table.get(probe);
             if (result.has_value()) {
                 return decode_value(*result);
+            }
+
+            if (result.error() == ErrorCode::KEY_DELETED) {
+                return nullptr;
             }
 
             if (result.error() == ErrorCode::FILE_ERROR) {
